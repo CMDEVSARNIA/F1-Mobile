@@ -18,6 +18,8 @@ const PAINT_HINTS := ["body", "paint", "livery", "chassis", "main"]
 const WHEEL_RADIUS := 0.36
 
 var team_color := Color.RED
+## Height of the tallest part, used to place the on-board camera.
+var top_height := 1.06
 var _front_wheels: Array[Node3D] = []
 var _all_wheels: Array[Node3D] = []
 var _spin := 0.0
@@ -55,7 +57,8 @@ func _load_custom(path: String) -> void:
 	var c := box.get_center()
 	holder.scale = Vector3.ONE * s
 	holder.position = -Vector3(c.x, box.position.y, c.z) * s
-	_paint(inst)
+	top_height = box.size.y * s
+	_paint(holder)
 
 
 ## Combined bounds of every mesh under `root`, in root's local space.
@@ -78,7 +81,11 @@ func _paint(root: Node) -> void:
 			var m := mi.get_active_material(i) as BaseMaterial3D
 			if m == null:
 				continue
-			var name := (m.resource_name + " " + mi.name).to_lower()
+			# OBJ imports carry the material name on the surface, glTF on the material.
+			var surface := ""
+			if mi.mesh is ArrayMesh:
+				surface = (mi.mesh as ArrayMesh).surface_get_name(i)
+			var name := (m.resource_name + " " + surface + " " + mi.name).to_lower()
 			for hint: String in PAINT_HINTS:
 				if hint in name:
 					var painted: BaseMaterial3D = m.duplicate()

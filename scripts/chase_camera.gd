@@ -1,7 +1,7 @@
 extends Camera3D
 ## Smooth chase camera with speed-based FOV, plus a cockpit (T-cam) view.
 
-enum Mode { CHASE, FAR_CHASE, COCKPIT }
+enum Mode { CHASE, FAR_CHASE, COCKPIT }  # COCKPIT is a T-cam above the airbox
 
 var target: Node3D
 var mode := Mode.CHASE
@@ -30,8 +30,11 @@ func _physics_process(dt: float) -> void:
 	fov = lerpf(fov, 68.0 + clampf(absf(speed) / 90.0, 0.0, 1.0) * 10.0, dt * 3.0)
 	match mode:
 		Mode.COCKPIT:
-			global_transform = Transform3D(t.basis, t * Vector3(0, 1.12, -0.05))
-			rotate_object_local(Vector3.RIGHT, deg_to_rad(-3.0))
+			# Sits just above the car's tallest part so any model stays out of view.
+			var model = target.get("model")
+			var top: float = model.top_height if model else 1.06
+			global_transform = Transform3D(t.basis, t * Vector3(0, top + 0.18, 0.4))
+			rotate_object_local(Vector3.RIGHT, deg_to_rad(-6.0))
 		_:
 			var dist := 6.5 if mode == Mode.CHASE else 11.0
 			var height := 2.1 if mode == Mode.CHASE else 3.6

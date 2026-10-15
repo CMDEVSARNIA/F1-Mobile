@@ -1,0 +1,35 @@
+newmtl plank
+Kd 0.55 0.42 0.25
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl rain_light
+Kd 1.0 0.08 0.05
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl body
+Kd 1.0 1.0 1.0
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl rim
+Kd 0.72 0.72 0.75
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl helmet
+Kd 1.0 0.8 0.1
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl carbon
+Kd 0.07 0.07 0.08
+Ks 0.25 0.25 0.25
+Ns 60
+
+newmtl carbon_tyre
+Kd 0.13 0.13 0.14
+Ks 0.25 0.25 0.25
+Ns 60
+
