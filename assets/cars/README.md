@@ -1,22 +1,30 @@
 # Custom car model
 
-Drop a glTF binary here named **`car.glb`** and every car on the grid uses it
-instead of the built-in low-poly car (`scripts/car_model.gd`).
+Save a model here as **`car.glb`** (also accepted: `car.gltf`, `car.fbx`, `car.obj`)
+and every car on the grid uses it instead of the built-in low-poly car.
 
-Rules the game assumes:
+The game fits it automatically (`scripts/car_model.gd`):
 
-- The car **faces -Z** (Godot's forward). If it drives sideways or backwards, change
-  `CUSTOM_YAW_DEG` in `scripts/car_model.gd` (try 90, -90 or 180).
-- Origin on the ground, roughly between the axles; real-world scale is about
-  5.5 m long and 2 m wide. Fix size with `CUSTOM_SCALE`, position with `CUSTOM_OFFSET`.
-- Keep it **under ~30k triangles** and textures at 1024 px or below. Ten of these on
-  screen on a phone add up fast.
+- the longest side is laid along the track and scaled to F1 length (5.6 m)
+- the model is centred and put on the ground
+- materials or meshes named like `body`, `paint`, `livery`, `chassis` or `main`
+  get each team's colour
 
-Where to look: Sketchfab (filter "Downloadable", search "F1 car" / "formula car"
-/ "open wheel"), Poly Pizza, or CGTrader free models. Download as **glTF/GLB**.
-Check the licence on each one. For a personal, never-distributed build most
-CC-BY / CC-BY-NC models are fine, but don't publish an APK containing them
-without honouring the licence.
+The one thing it can't guess is front vs back. If the cars drive backwards, set
+`CUSTOM_YAW_DEG := 180.0` in `scripts/car_model.gd`.
 
-Note: a custom model gets no team colour (it keeps its own textures), and wheels
-won't spin/steer unless you wire them up in `car_model.gd`.
+Keep it **under ~30k triangles**, with textures at 1024 px or smaller, because there
+are ten on screen on a phone. Wheels won't spin or steer on a custom model.
+
+## Free open-wheel models on itch.io
+
+| Model | Licence | Formats | Notes |
+| --- | --- | --- | --- |
+| [Iconic Open Wheelers – Low Poly](https://som-natalino.itch.io/low) by som_natalino | CC0 | GLB, FBX, OBJ | Best fit. The single **f2002** car is a free download (2.2 MB); the full pack of 50s to 00s cars is $1+. |
+| [F1 Style Race Car Voxel](https://join217.itch.io/open-wheel-race-car) by join217 | Free, commercial OK | OBJ | Blocky voxel look. |
+| [Formula 1 + low-poly tag](https://itch.io/game-assets/tag-formula1/tag-low-poly) | varies | varies | Check the licence on each page. |
+| [Formula Racing Asset Pack](https://ewinsky.itch.io/fmp-racing-game) by Neo Ewinsky | not stated | — | Still in development, licence unclear. Ask before using. |
+
+On itch.io, a free file is under **Download** (for "name your own price", click
+"No thanks, just take me to the downloads"). If the zip contains a `.glb` plus a
+textures folder, copy both here and keep the folder name the same.

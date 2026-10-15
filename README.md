@@ -47,8 +47,8 @@ Even quicker: plug the phone in with USB debugging enabled and press the
 
 ## Upgrading the art
 
-- **Car:** drop a `car.glb` into `assets/cars/`. See `assets/cars/README.md` for
-  orientation, scale, triangle budget and licence notes.
+- **Car:** drop a `car.glb` (or .gltf/.fbx/.obj) into `assets/cars/` and it's auto-fitted
+  and team-coloured. `assets/cars/README.md` lists free open-wheel models on itch.io.
 - **More tracks:** the [TUM racetrack-database](https://github.com/TUMFTM/racetrack-database)
   has around 25 circuits in the same CSV format. Copy one into `tracks/`, add a
   `<name>.csv.import` file with the same contents as the existing ones (it stops

@@ -3,11 +3,18 @@ extends Node3D
 ## otherwise builds a low-poly open-wheel car from primitives.
 ## Convention: car faces -Z, origin on the ground between the axles.
 
-const CUSTOM_MODEL := "res://assets/cars/car.glb"
-## Tweak these to fit whatever model you download.
-const CUSTOM_SCALE := 1.0
+## Drop a model at any of these paths and every car uses it. It is fitted
+## automatically: longest side laid along the track, scaled to F1 length,
+## centred and put on the ground.
+const CUSTOM_MODELS := [
+	"res://assets/cars/car.glb", "res://assets/cars/car.gltf",
+	"res://assets/cars/car.fbx", "res://assets/cars/car.obj",
+]
+const TARGET_LENGTH := 5.6
+## If the car drives backwards, set this to 180.
 const CUSTOM_YAW_DEG := 0.0
-const CUSTOM_OFFSET := Vector3.ZERO
+## Materials whose names contain one of these get the team colour.
+const PAINT_HINTS := ["body", "paint", "livery", "chassis", "main"]
 const WHEEL_RADIUS := 0.36
 
 var team_color := Color.RED
@@ -17,15 +24,67 @@ var _spin := 0.0
 
 
 func _ready() -> void:
-	if ResourceLoader.exists(CUSTOM_MODEL):
-		var scene: PackedScene = load(CUSTOM_MODEL)
-		var inst := scene.instantiate() as Node3D
-		inst.scale = Vector3.ONE * CUSTOM_SCALE
-		inst.rotation_degrees.y = CUSTOM_YAW_DEG
-		inst.position = CUSTOM_OFFSET
-		add_child(inst)
-		return
+	for path: String in CUSTOM_MODELS:
+		if ResourceLoader.exists(path):
+			_load_custom(path)
+			return
 	_build_procedural()
+
+
+func _load_custom(path: String) -> void:
+	var res := load(path)
+	var inst: Node3D
+	if res is PackedScene:
+		inst = res.instantiate()
+	elif res is Mesh:  # .obj imports as a bare mesh
+		inst = MeshInstance3D.new()
+		inst.mesh = res
+	else:
+		push_warning("Unsupported car model %s, using built-in car" % path)
+		_build_procedural()
+		return
+	var holder := Node3D.new()
+	add_child(holder)
+	holder.add_child(inst)
+	# Lay the longest horizontal side along Z (the driving axis).
+	var box := _local_aabb(holder)
+	var yaw := PI / 2.0 if box.size.x > box.size.z else 0.0
+	inst.rotation.y = yaw + deg_to_rad(CUSTOM_YAW_DEG)
+	box = _local_aabb(holder)
+	var s := TARGET_LENGTH / maxf(box.size.z, 0.001)
+	var c := box.get_center()
+	holder.scale = Vector3.ONE * s
+	holder.position = -Vector3(c.x, box.position.y, c.z) * s
+	_paint(inst)
+
+
+## Combined bounds of every mesh under `root`, in root's local space.
+func _local_aabb(root: Node3D) -> AABB:
+	var inv := root.global_transform.affine_inverse()
+	var out := AABB()
+	var first := true
+	for mi: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
+		var b := (inv * mi.global_transform) * mi.get_aabb()
+		out = b if first else out.merge(b)
+		first = false
+	return out
+
+
+func _paint(root: Node) -> void:
+	for mi: MeshInstance3D in root.find_children("*", "MeshInstance3D", true, false):
+		if mi.mesh == null:
+			continue
+		for i in mi.mesh.get_surface_count():
+			var m := mi.get_active_material(i) as BaseMaterial3D
+			if m == null:
+				continue
+			var name := (m.resource_name + " " + mi.name).to_lower()
+			for hint: String in PAINT_HINTS:
+				if hint in name:
+					var painted: BaseMaterial3D = m.duplicate()
+					painted.albedo_color = team_color
+					mi.set_surface_override_material(i, painted)
+					break
 
 
 func update_visual(steer: float, speed: float, dt: float) -> void:
