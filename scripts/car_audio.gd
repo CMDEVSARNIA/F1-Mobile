@@ -58,5 +58,7 @@ func _process(dt: float) -> void:
 
 
 func _on_impact(strength: float) -> void:
+	if not positional and GameState.settings.haptics and OS.has_feature("mobile"):
+		Input.vibrate_handheld(int(clampf(strength * 3.0, 20.0, 90.0)))
 	_impact.volume_db = clampf(remap(strength, 2.0, 30.0, -18.0, 0.0), -18.0, 0.0)
 	_impact.play()

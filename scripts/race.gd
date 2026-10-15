@@ -47,7 +47,9 @@ func _ready() -> void:
 
 	hud = Hud.new()
 	add_child(hud)
-	hud.touch.show_steering = GameState.settings.steering == 0
+	hud.touch.steer_mode = mini(GameState.settings.steering, 2)
+	hud.touch.auto_throttle = GameState.settings.auto_throttle
+	hud.touch.haptics = GameState.settings.haptics
 	hud.touch.visible = DisplayServer.is_touchscreen_available() or OS.has_feature("mobile")
 	hud.minimap.setup(track, cars, player)
 	hud.pause_pressed.connect(_toggle_pause)
@@ -116,6 +118,7 @@ func _spawn_cars(opponents: int) -> void:
 			player = car
 			car.braking_assist = GameState.settings.braking_assist
 			car.steering_mode = GameState.settings.steering
+			car.auto_throttle = GameState.settings.auto_throttle
 		else:
 			# Front of the grid is a touch quicker, like a real grid.
 			car.ai_skill = clampf(0.97 - slot * 0.006 + rng.randf_range(-0.01, 0.01), 0.88, 0.99)

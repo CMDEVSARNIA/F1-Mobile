@@ -4,6 +4,8 @@ extends CanvasLayer
 
 const Minimap = preload("res://scripts/minimap.gd")
 const TouchControls = preload("res://scripts/touch_controls.gd")
+const Dashboard = preload("res://scripts/ui/dashboard.gd")
+const IconButton = preload("res://scripts/ui/icon_button.gd")
 
 signal pause_pressed
 signal camera_pressed
@@ -18,8 +20,7 @@ var lap_label: Label
 var time_label: Label
 var last_label: Label
 var best_label: Label
-var speed_label: Label
-var gear_label: Label
+var dashboard: Control
 var message_label: Label
 var lights: Array[Panel] = []
 var lights_box: HBoxContainer
@@ -37,6 +38,7 @@ func _ready() -> void:
 	root = Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.theme = GameState.make_theme()
 	add_child(root)
 
 	touch = TouchControls.new()
@@ -60,20 +62,18 @@ func _ready() -> void:
 	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 	buttons.add_theme_constant_override("separation", 12)
 	root.add_child(buttons)
-	_place(buttons, Control.PRESET_CENTER_TOP, -170, 12, 170, 64)
-	_button(buttons, "II", pause_pressed.emit)
-	_button(buttons, "CAM", camera_pressed.emit)
-	_button(buttons, "RESET", reset_pressed.emit)
+	buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place(buttons, Control.PRESET_CENTER_TOP, -120, 12, 120, 76)
+	for spec in [[IconButton.Icon.PAUSE, pause_pressed], [IconButton.Icon.CAMERA, camera_pressed],
+			[IconButton.Icon.RESET, reset_pressed]]:
+		var ib := IconButton.new(spec[0])
+		ib.pressed.connect(spec[1].emit)
+		buttons.add_child(ib)
 
-	# Bottom centre: speed + gear
-	var sp := VBoxContainer.new()
-	sp.alignment = BoxContainer.ALIGNMENT_END
-	sp.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(sp)
-	_place(sp, Control.PRESET_CENTER_BOTTOM, -100, -170, 100, -12)
-	gear_label = _label(sp, "N", 40, HORIZONTAL_ALIGNMENT_CENTER)
-	speed_label = _label(sp, "0", 56, HORIZONTAL_ALIGNMENT_CENTER)
-	_label(sp, "KM/H", 18, HORIZONTAL_ALIGNMENT_CENTER)
+	# Bottom centre: driver display with shift lights
+	dashboard = Dashboard.new()
+	root.add_child(dashboard)
+	_place(dashboard, Control.PRESET_CENTER_BOTTOM, -125, -162, 125, -12)
 
 	# Messages
 	message_label = Label.new()
@@ -139,8 +139,11 @@ func update_telemetry(car, position: int, total: int, laps: int, now: float, rac
 	time_label.text = GameState.format_time(lap_t) if racing else "0:00.000"
 	last_label.text = "LAST " + GameState.format_time(car.lap_times[-1] if car.lap_times.size() else 0.0)
 	best_label.text = "BEST " + GameState.format_time(car.best_lap)
-	speed_label.text = str(int(absf(car.speed) * 3.6))
-	gear_label.text = "R" if car.speed < -0.5 else ("N" if absf(car.speed) < 0.5 and car.throttle < 0.05 else str(car.gear))
+	dashboard.speed_kmh = int(absf(car.speed) * 3.6)
+	dashboard.gear_text = "R" if car.speed < -0.5 else ("N" if absf(car.speed) < 0.5 and car.throttle < 0.05 else str(car.gear))
+	dashboard.rpm = car.rpm
+	dashboard.throttle = car.throttle
+	dashboard.brake = car.brake
 
 
 func _process(dt: float) -> void:
@@ -182,7 +185,7 @@ func _build_pause() -> void:
 	pause_panel = _panel()
 	var box: VBoxContainer = pause_panel.get_child(0)
 	_label(box, "PAUSED", 40, HORIZONTAL_ALIGNMENT_CENTER)
-	_button(box, "RESUME", resume_pressed.emit)
+	GameState.style_primary(_button(box, "RESUME", resume_pressed.emit))
 	_button(box, "RESTART", restart_pressed.emit)
 	_button(box, "MAIN MENU", menu_pressed.emit)
 	pause_panel.visible = false
@@ -198,7 +201,7 @@ func _build_results() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 20)
 	box.add_child(row)
-	_button(row, "RACE AGAIN", restart_pressed.emit)
+	GameState.style_primary(_button(row, "RACE AGAIN", restart_pressed.emit))
 	_button(row, "MAIN MENU", menu_pressed.emit)
 	results_panel.visible = false
 
@@ -266,7 +269,7 @@ func _button(parent: Control, text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", 24)
-	b.custom_minimum_size = Vector2(90, 52)
+	b.custom_minimum_size = Vector2(240, 60)
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(cb)
 	parent.add_child(b)

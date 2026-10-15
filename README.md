@@ -15,8 +15,8 @@ code and data, so the project runs with no third-party art.
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
 | Low-poly F1-style car (halo, wings, sidepods, spinning and steering wheels) in team colours | `scripts/car_model.gd` |
 | Race flow: 5 red lights, random hold, lights out, laps, positions, wrong-way warning, results, personal bests saved per track | `scripts/race.gd` |
-| Mobile controls: multi-touch zones (steer, brake, gas), tilt steering, optional braking assist | `scripts/touch_controls.gd` |
-| HUD: position, lap, lap/last/best times, speed, gear, minimap, pause | `scripts/hud.gd`, `scripts/minimap.gd` |
+| Mobile controls modelled on GRID Autosport / Real Racing: arrow buttons, drag-to-steer wheel or tilt; pedal-shaped brake/gas; auto-throttle by default (manual "Pro" option); braking assist; haptic taps | `scripts/touch_controls.gd` |
+| HUD: position, lap, lap/last/best times, minimap, round icon buttons, F1-style driver display with shift lights, gear, speed and pedal bars | `scripts/hud.gd`, `scripts/ui/` |
 | Sound: engine loop pitched by RPM, tyre squeal, wall impacts; AI cars are positional so you hear them pass | `scripts/car_audio.gd` |
 | Cameras: chase, far chase, cockpit (CAM button / `C`) | `scripts/chase_camera.gd` |
 

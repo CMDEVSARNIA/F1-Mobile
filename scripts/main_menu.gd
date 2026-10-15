@@ -6,10 +6,13 @@ var _laps_btn: Button
 var _opp_btn: Button
 var _steer_btn: Button
 var _assist_btn: Button
+var _throttle_btn: Button
+var _haptics_btn: Button
 var _info: Label
 
 
 func _ready() -> void:
+	theme = GameState.make_theme()
 	var bg := ColorRect.new()
 	bg.color = Color(0.07, 0.07, 0.1)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -48,13 +51,15 @@ func _ready() -> void:
 	# Right column: settings + start
 	var right := VBoxContainer.new()
 	right.custom_minimum_size = Vector2(420, 0)
-	right.add_theme_constant_override("separation", 12)
+	right.add_theme_constant_override("separation", 10)
 	root.add_child(right)
 	_label(right, "RACE SETTINGS", 20).add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
 	_laps_btn = _button(right, "", _cycle_laps)
 	_opp_btn = _button(right, "", _cycle_opponents)
 	_steer_btn = _button(right, "", _cycle_steering)
+	_throttle_btn = _button(right, "", _toggle_throttle)
 	_assist_btn = _button(right, "", _toggle_assist)
+	_haptics_btn = _button(right, "", _toggle_haptics)
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(spacer)
@@ -65,14 +70,7 @@ func _ready() -> void:
 	var start := _button(right, "START RACE", _start)
 	start.custom_minimum_size.y = 84
 	start.add_theme_font_size_override("font_size", 34)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.88, 0.02, 0.0)
-	sb.set_corner_radius_all(10)
-	start.add_theme_stylebox_override("normal", sb)
-	var sbh := sb.duplicate()
-	sbh.bg_color = Color(1.0, 0.2, 0.15)
-	start.add_theme_stylebox_override("hover", sbh)
-	start.add_theme_stylebox_override("pressed", sbh)
+	GameState.style_primary(start)
 
 	_refresh()
 
@@ -88,7 +86,7 @@ func _label(parent: Control, text: String, size: int) -> Label:
 func _button(parent: Control, text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(0, 64)
+	b.custom_minimum_size = Vector2(0, 58)
 	b.add_theme_font_size_override("font_size", 24)
 	b.focus_mode = Control.FOCUS_NONE
 	b.pressed.connect(cb)
@@ -108,7 +106,9 @@ func _refresh() -> void:
 		_track_buttons[i].button_pressed = i == s.track
 	_laps_btn.text = "Laps: %d" % s.laps
 	_opp_btn.text = "Opponents: %d" % s.opponents
-	_steer_btn.text = "Steering: " + ["Touch buttons", "Tilt", "Tilt (inverted)"][s.steering]
+	_steer_btn.text = "Steering: " + ["Arrows", "Wheel (drag)", "Tilt", "Tilt (inverted)"][clampi(s.steering, 0, 3)]
+	_throttle_btn.text = "Throttle: " + ("Auto" if s.auto_throttle else "Manual (Pro)")
+	_haptics_btn.text = "Vibration: " + ("ON" if s.haptics else "OFF")
 	_assist_btn.text = "Braking assist: " + ("ON" if s.braking_assist else "OFF")
 
 
@@ -133,7 +133,17 @@ func _cycle_opponents() -> void:
 
 
 func _cycle_steering() -> void:
-	GameState.settings.steering = (GameState.settings.steering + 1) % 3
+	GameState.settings.steering = (GameState.settings.steering + 1) % 4
+	_refresh()
+
+
+func _toggle_throttle() -> void:
+	GameState.settings.auto_throttle = not GameState.settings.auto_throttle
+	_refresh()
+
+
+func _toggle_haptics() -> void:
+	GameState.settings.haptics = not GameState.settings.haptics
 	_refresh()
 
 

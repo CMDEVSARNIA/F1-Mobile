@@ -18,7 +18,8 @@ var controls_enabled := false
 var ai_skill := 0.95
 var ai_line := 0.0  # preferred lateral offset
 var braking_assist := false
-var steering_mode := 0  # 0 touch/keys, 1 tilt, 2 tilt inverted
+var steering_mode := 0  # 0 arrows, 1 wheel, 2 tilt, 3 tilt inverted
+var auto_throttle := false
 var others: Array = []  # other cars, for AI avoidance
 
 # Inputs (0..1, steer -1..1)
@@ -111,19 +112,22 @@ func _physics_process(dt: float) -> void:
 
 func _player_input(dt: float) -> void:
 	var target := Input.get_axis("steer_left", "steer_right")
-	if steering_mode > 0 and absf(target) < 0.01:
+	if steering_mode >= 2 and absf(target) < 0.01:
 		# Godot rotates sensor axes to match the screen, so steering-wheel
 		# style rolling shows up on x. Sign differs between devices, hence
 		# the "inverted" option in the menu.
 		var tilt := Input.get_accelerometer().x / 4.5
-		if steering_mode == 2:
+		if steering_mode == 3:
 			tilt = -tilt
 		if absf(tilt) < 0.04:
 			tilt = 0.0
 		target = clampf(tilt, -1.0, 1.0)
 	steer = move_toward(steer, target, dt * 5.0)
-	throttle = Input.get_action_strength("accelerate")
 	brake = Input.get_action_strength("brake")
+	throttle = Input.get_action_strength("accelerate")
+	if auto_throttle:
+		# Like most mobile racers: the car accelerates by itself, you brake.
+		throttle = 0.0 if brake > 0.05 else 1.0
 	if braking_assist and speed > 15.0:
 		var limit := _target_speed_ahead() * 1.04
 		if speed > limit:

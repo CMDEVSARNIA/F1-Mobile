@@ -32,7 +32,9 @@ var settings := {
 	"track": 0,
 	"laps": 3,
 	"opponents": 5,
-	"steering": 0,  # 0 touch, 1 tilt, 2 tilt inverted
+	"steering": 0,  # 0 arrows, 1 wheel (drag), 2 tilt, 3 tilt inverted
+	"auto_throttle": true,
+	"haptics": true,
 	"braking_assist": true,
 	"camera": 0,
 }
@@ -75,6 +77,52 @@ func _load() -> void:
 	if cfg.has_section("best_laps"):
 		for key in cfg.get_section_keys("best_laps"):
 			best_laps[key] = cfg.get_value("best_laps", key)
+
+
+## Shared look for menus and HUD panels: dark glassy buttons, red accent.
+static func make_theme() -> Theme:
+	var t := Theme.new()
+	t.default_font_size = 24
+	var normal := _box(Color(0.12, 0.12, 0.16, 0.92), Color(1, 1, 1, 0.08), 2)
+	var hover := _box(Color(0.17, 0.17, 0.22, 0.95), Color(1, 1, 1, 0.18), 2)
+	var pressed := _box(Color(0.22, 0.05, 0.05, 0.95), Color(0.88, 0.02, 0.0), 2)
+	pressed.border_width_left = 8
+	for st in [normal, hover, pressed]:
+		st.content_margin_left = 22
+		st.content_margin_right = 22
+	t.set_stylebox("normal", "Button", normal)
+	t.set_stylebox("hover", "Button", hover)
+	t.set_stylebox("pressed", "Button", pressed)
+	t.set_stylebox("hover_pressed", "Button", pressed)
+	t.set_stylebox("focus", "Button", StyleBoxEmpty.new())
+	t.set_color("font_color", "Button", Color(0.92, 0.92, 0.95))
+	t.set_color("font_pressed_color", "Button", Color.WHITE)
+	t.set_color("font_hover_color", "Button", Color.WHITE)
+	t.set_color("font_hover_pressed_color", "Button", Color.WHITE)
+	var panel := _box(Color(0.05, 0.05, 0.08, 0.94), Color(0.88, 0.02, 0.0), 0)
+	panel.border_width_top = 6
+	panel.set_content_margin_all(28)
+	t.set_stylebox("panel", "PanelContainer", panel)
+	return t
+
+
+## Big red call-to-action button style (START RACE, RACE AGAIN).
+static func style_primary(b: Button) -> void:
+	b.add_theme_stylebox_override("normal", _box(Color(0.88, 0.02, 0.0), Color(1, 1, 1, 0.15), 2))
+	b.add_theme_stylebox_override("hover", _box(Color(1.0, 0.18, 0.12), Color(1, 1, 1, 0.3), 2))
+	b.add_theme_stylebox_override("pressed", _box(Color(0.7, 0.0, 0.0), Color(1, 1, 1, 0.3), 2))
+
+
+static func _box(bg: Color, border: Color, bw: int) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(bw)
+	sb.set_corner_radius_all(12)
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	sb.anti_aliasing = true
+	return sb
 
 
 static func format_time(seconds: float) -> String:
