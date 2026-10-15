@@ -32,6 +32,8 @@ var gear := 1
 var rpm := 4000.0
 var on_grass := false
 var wrong_way := false
+var skid := 0.0  # 0..1, drives the tyre-squeal sound
+var _impact_cooldown := 0.0
 
 # Race tracking
 var track_idx := 0
@@ -50,6 +52,7 @@ var _max_lap := 0
 
 signal lap_completed(car, lap_time: float)
 signal crossed_finish(car)
+signal impact(strength: float)
 
 var model: Node3D
 
@@ -216,6 +219,12 @@ func _integrate(dt: float) -> void:
 	var max_angle := lerpf(0.42, 0.05, clampf(vabs / 75.0, 0.0, 1.0))
 	var yaw_rate := -v_long * tan(steer * max_angle) / WHEELBASE
 	var yaw_cap := grip_accel(vabs) * grip_mul / maxf(vabs, 0.5)
+	# Tyres squeal when asked for more than the grip gives, or under hard braking.
+	var over := absf(yaw_rate) / yaw_cap - 1.0
+	var target_skid := clampf(over * 2.0, 0.0, 1.0) if vabs > 12.0 and not on_grass else 0.0
+	if brake > 0.7 and v_long > 25.0 and not on_grass:
+		target_skid = maxf(target_skid, 0.5)
+	skid = move_toward(skid, target_skid, dt * 4.0)
 	yaw_rate = clampf(yaw_rate, -yaw_cap, yaw_cap)
 	rotate_y(yaw_rate * dt)
 
@@ -227,9 +236,14 @@ func _integrate(dt: float) -> void:
 	velocity.y = 0.0
 	move_and_slide()
 	# Scrub speed on wall hits so contact hurts.
+	_impact_cooldown -= dt
 	for c in get_slide_collision_count():
 		var col := get_slide_collision(c)
 		var hit := absf(col.get_normal().dot(fwd))
+		var strength := hit * absf(v_long)
+		if strength > 2.0 and _impact_cooldown <= 0.0:
+			impact.emit(strength)
+			_impact_cooldown = 0.4
 		velocity *= 1.0 - 0.5 * hit * dt * 10.0
 	global_position.y = 0.0
 	speed = velocity.dot(-global_transform.basis.z)

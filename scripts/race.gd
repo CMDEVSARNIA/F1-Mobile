@@ -6,7 +6,7 @@ const Track = preload("res://scripts/track.gd")
 const Car = preload("res://scripts/car.gd")
 const ChaseCamera = preload("res://scripts/chase_camera.gd")
 const Hud = preload("res://scripts/hud.gd")
-const EngineAudio = preload("res://scripts/engine_audio.gd")
+const CarAudio = preload("res://scripts/car_audio.gd")
 
 enum State { COUNTDOWN, RACING, FINISHED }
 
@@ -44,9 +44,6 @@ func _ready() -> void:
 	camera.mode = GameState.settings.camera
 	add_child(camera)
 
-	var audio := EngineAudio.new()
-	audio.car = player
-	add_child(audio)
 
 	hud = Hud.new()
 	add_child(hud)
@@ -124,6 +121,10 @@ func _spawn_cars(opponents: int) -> void:
 			car.ai_skill = clampf(0.97 - slot * 0.006 + rng.randf_range(-0.01, 0.01), 0.88, 0.99)
 			car.ai_line = rng.randf_range(-1.5, 1.5)
 			ai_i += 1
+		var audio := CarAudio.new()
+		audio.car = car
+		audio.positional = not is_player
+		car.add_child(audio)
 		cars.append(car)
 	for c in cars:
 		c.others = cars

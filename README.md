@@ -10,14 +10,14 @@ code and data, so the project runs with no third-party art.
 | Feature | Where |
 | --- | --- |
 | Real circuits (Monza, Silverstone, Spa, Suzuka) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
-| Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, trees, grid slots, chequered start line | `scripts/track.gd` |
+| Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
 | Arcade car physics: bicycle-model steering, downforce grip that grows with speed (~2g slow, ~5g fast), ~335 km/h top speed, grass penalty, reverse | `scripts/car.gd` |
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
 | Low-poly F1-style car (halo, wings, sidepods, spinning and steering wheels) in team colours | `scripts/car_model.gd` |
 | Race flow: 5 red lights, random hold, lights out, laps, positions, wrong-way warning, results, personal bests saved per track | `scripts/race.gd` |
 | Mobile controls: multi-touch zones (steer, brake, gas), tilt steering, optional braking assist | `scripts/touch_controls.gd` |
 | HUD: position, lap, lap/last/best times, speed, gear, minimap, pause | `scripts/hud.gd`, `scripts/minimap.gd` |
-| Procedural V6-ish engine sound (no audio files) | `scripts/engine_audio.gd` |
+| Sound: engine loop pitched by RPM, tyre squeal, wall impacts; AI cars are positional so you hear them pass | `scripts/car_audio.gd` |
 | Cameras: chase, far chase, cockpit (CAM button / `C`) | `scripts/chase_camera.gd` |
 
 ## Running it
@@ -71,4 +71,5 @@ Even quicker: plug the phone in with USB debugging enabled and press the
 ## Licences
 
 - Track centerlines: TUM racetrack-database, **LGPL-3.0** (`tracks/LICENSE-LGPL-3.0.txt`).
+- Forest/tent models and engine/skid/impact sounds: Kenney Starter Kit Racing, **CC0** (`assets/kenney/LICENSE.md`).
 - No team names, logos or liveries are included. Drivers and colours are fictional.

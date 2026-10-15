@@ -12,6 +12,9 @@ const GRID_CELL := 40.0
 const GRIP_BASE := 19.0
 const GRIP_AERO := 0.0072
 const AI_PLAN_DECEL := 28.0
+const FOREST_MODEL := "res://assets/kenney/models/decoration-forest.glb"
+const TENTS_MODEL := "res://assets/kenney/models/decoration-tents.glb"
+const FOREST_SCALE := 3.0
 const PLAN_GRIP_MARGIN := 0.85
 
 var points := PackedVector3Array()
@@ -478,6 +481,25 @@ func _add_mesh(mesh: Mesh, mat: Material) -> MeshInstance3D:
 	return mi
 
 
+## First mesh found in an imported glTF scene.
+func _glb_mesh(path: String) -> Mesh:
+	var scene: PackedScene = load(path)
+	var root := scene.instantiate()
+	var mi := root.find_children("*", "MeshInstance3D", true, false)
+	var mesh: Mesh = mi[0].mesh if mi.size() > 0 else null
+	root.free()
+	return mesh
+
+
+## Copy of a mesh's first material with its colour multiplied by `tint`.
+func _tinted(mesh: Mesh, tint: Color) -> Material:
+	var src := mesh.surface_get_material(0) as BaseMaterial3D
+	var m: BaseMaterial3D = src.duplicate() if src else StandardMaterial3D.new()
+	m.albedo_color = m.albedo_color * tint
+	m.roughness = 1.0
+	return m
+
+
 func _noise_texture(freq: float, lo: float, hi: float) -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
 	noise.frequency = freq
@@ -500,39 +522,62 @@ func _build_scenery() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(length)
 
-	# Trees (one MultiMesh = one draw call, cheap on phones).
-	var tree := CylinderMesh.new()
-	tree.top_radius = 0.0
-	tree.bottom_radius = 2.6
-	tree.height = 9.0
-	tree.radial_segments = 6
-	tree.rings = 1
-	var tree_mat := StandardMaterial3D.new()
-	tree_mat.albedo_color = Color(0.13, 0.32, 0.13)
-	tree_mat.roughness = 1.0
-	tree.material = tree_mat
-	var xforms: Array[Transform3D] = []
-	var area := bounds.grow(350.0)
-	var tries := 0
-	while xforms.size() < 1400 and tries < 9000:
-		tries += 1
-		var p := Vector3(rng.randf_range(area.position.x, area.end.x), 0.0,
-				rng.randf_range(area.position.y, area.end.y))
-		if is_near_track(p, KERB_WIDTH + RUNOFF + 10.0):
-			continue
-		var s := rng.randf_range(0.7, 1.5)
-		var b := Basis().scaled(Vector3(s, s * rng.randf_range(0.8, 1.3), s))
-		xforms.append(Transform3D(b, p + Vector3(0, 4.5 * b.y.y, 0)))
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = tree
-	mm.instance_count = xforms.size()
-	for i in xforms.size():
-		mm.set_instance_transform(i, xforms[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(mmi)
+	# Forest: Kenney CC0 tiles (10 m square, ~2k tris) scaled up and batched
+	# into one MultiMesh per map chunk, so off-screen chunks get culled and
+	# distant ones drop out via visibility range.
+	var forest := _glb_mesh(FOREST_MODEL)
+	# Kenney's palette is bright teal; pull it toward natural, darker greens.
+	var forest_mat := _tinted(forest, Color(0.55, 0.62, 0.38))
+	var tile := 10.0 * FOREST_SCALE
+	var chunks := {}
+	var area := bounds.grow(300.0)
+	var gx := area.position.x
+	while gx < area.end.x:
+		var gz := area.position.y
+		while gz < area.end.y:
+			var p := Vector3(gx + rng.randf_range(-4, 4), 0.0, gz + rng.randf_range(-4, 4))
+			gz += tile
+			# Sparse clumps rather than a carpet, and well clear of the barriers.
+			if rng.randf() > 0.45 or is_near_track(p, KERB_WIDTH + RUNOFF + tile * 0.75):
+				continue
+			var b := Basis(Vector3.UP, rng.randi_range(0, 3) * PI / 2.0) \
+					* Basis().scaled(Vector3.ONE * FOREST_SCALE * rng.randf_range(0.85, 1.15))
+			var key := Vector2i(floori(p.x / 400.0), floori(p.z / 400.0))
+			if not chunks.has(key):
+				chunks[key] = []
+			chunks[key].append(Transform3D(b, p))
+		gx += tile
+	for key in chunks:
+		var xforms: Array = chunks[key]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = forest
+		mm.instance_count = xforms.size()
+		for i in xforms.size():
+			mm.set_instance_transform(i, xforms[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mmi.visibility_range_end = 1100.0
+		mmi.material_override = forest_mat
+		add_child(mmi)
+
+	# Paddock / fan-zone tents near the start, on whichever side is free.
+	var tents := _glb_mesh(TENTS_MODEL)
+	var tents_mat := _tinted(tents, Color(0.75, 0.8, 0.7))
+	for s_at: float in [-260.0, -200.0, 120.0, 180.0, 240.0]:
+		var i := index_at_distance(s_at)
+		for side: float in [-1.0, 1.0]:
+			var off := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 22.0
+			var p := points[i] + rights[i] * off * side
+			if is_near_track(p, KERB_WIDTH + RUNOFF + 12.0):
+				continue
+			var mi := MeshInstance3D.new()
+			mi.mesh = tents
+			mi.material_override = tents_mat
+			mi.transform = Transform3D(Basis.looking_at(tangents[i], Vector3.UP).scaled(Vector3.ONE * 2.2), p)
+			add_child(mi)
+			break
 
 	# Tiered grandstands along the start straight, wherever there's room.
 	var stand_mat := StandardMaterial3D.new()
