@@ -32,10 +32,16 @@ var settings := {
 	"track": 0,
 	"laps": 3,
 	"opponents": 5,
-	"steering": 0,  # 0 arrows, 1 wheel (drag), 2 tilt, 3 tilt inverted
+	"steering": 0,  # 0 arrows, 1 wheel (drag), 2 tilt
+	"tilt_invert": false,
+	"steer_sensitivity": 1.0,
+	"steer_assist": 0,  # 0 off, 1 low, 2 high
 	"auto_throttle": true,
+	"braking_assist": 2,  # 0 off, 1 low, 2 high
+	"control_size": 1.0,
+	"control_opacity": 0.75,
+	"mirrored": false,
 	"haptics": true,
-	"braking_assist": true,
 	"camera": 0,
 }
 
@@ -74,6 +80,12 @@ func _load() -> void:
 		return
 	for key in settings:
 		settings[key] = cfg.get_value("settings", key, settings[key])
+	# Older saves: steering 3 meant "tilt inverted", braking assist was a bool.
+	if settings.steering == 3:
+		settings.steering = 2
+		settings.tilt_invert = true
+	if settings.braking_assist is bool:
+		settings.braking_assist = 2 if settings.braking_assist else 0
 	if cfg.has_section("best_laps"):
 		for key in cfg.get_section_keys("best_laps"):
 			best_laps[key] = cfg.get_value("best_laps", key)

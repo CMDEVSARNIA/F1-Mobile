@@ -13,6 +13,7 @@ signal reset_pressed
 signal resume_pressed
 signal restart_pressed
 signal menu_pressed
+signal controls_pressed
 
 var root: Control
 var pos_label: Label
@@ -186,6 +187,7 @@ func _build_pause() -> void:
 	var box: VBoxContainer = pause_panel.get_child(0)
 	_label(box, "PAUSED", 40, HORIZONTAL_ALIGNMENT_CENTER)
 	GameState.style_primary(_button(box, "RESUME", resume_pressed.emit))
+	_button(box, "CONTROLS", controls_pressed.emit)
 	_button(box, "RESTART", restart_pressed.emit)
 	_button(box, "MAIN MENU", menu_pressed.emit)
 	pause_panel.visible = false

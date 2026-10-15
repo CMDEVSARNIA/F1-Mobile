@@ -4,10 +4,7 @@ extends Control
 var _track_buttons: Array[Button] = []
 var _laps_btn: Button
 var _opp_btn: Button
-var _steer_btn: Button
-var _assist_btn: Button
-var _throttle_btn: Button
-var _haptics_btn: Button
+var _controls_btn: Button
 var _info: Label
 
 
@@ -56,10 +53,9 @@ func _ready() -> void:
 	_label(right, "RACE SETTINGS", 20).add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
 	_laps_btn = _button(right, "", _cycle_laps)
 	_opp_btn = _button(right, "", _cycle_opponents)
-	_steer_btn = _button(right, "", _cycle_steering)
-	_throttle_btn = _button(right, "", _toggle_throttle)
-	_assist_btn = _button(right, "", _toggle_assist)
-	_haptics_btn = _button(right, "", _toggle_haptics)
+	_controls_btn = _button(right, "", _open_controls)
+	_controls_btn.custom_minimum_size.y = 84
+	_controls_btn.add_theme_font_size_override("font_size", 21)
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.add_child(spacer)
@@ -106,10 +102,10 @@ func _refresh() -> void:
 		_track_buttons[i].button_pressed = i == s.track
 	_laps_btn.text = "Laps: %d" % s.laps
 	_opp_btn.text = "Opponents: %d" % s.opponents
-	_steer_btn.text = "Steering: " + ["Arrows", "Wheel (drag)", "Tilt", "Tilt (inverted)"][clampi(s.steering, 0, 3)]
-	_throttle_btn.text = "Throttle: " + ("Auto" if s.auto_throttle else "Manual (Pro)")
-	_haptics_btn.text = "Vibration: " + ("ON" if s.haptics else "OFF")
-	_assist_btn.text = "Braking assist: " + ("ON" if s.braking_assist else "OFF")
+	var assists := ["off", "low", "high"]
+	_controls_btn.text = "CONTROLS & ASSISTS  ›\n%s  ·  %s gas  ·  brake assist %s" % [
+			["Arrows", "Wheel", "Tilt"][clampi(s.steering, 0, 2)],
+			"Auto" if s.auto_throttle else "Manual", assists[clampi(s.braking_assist, 0, 2)]]
 
 
 func _select_track(i: int) -> void:
@@ -132,24 +128,10 @@ func _cycle_opponents() -> void:
 	_refresh()
 
 
-func _cycle_steering() -> void:
-	GameState.settings.steering = (GameState.settings.steering + 1) % 4
-	_refresh()
-
-
-func _toggle_throttle() -> void:
-	GameState.settings.auto_throttle = not GameState.settings.auto_throttle
-	_refresh()
-
-
-func _toggle_haptics() -> void:
-	GameState.settings.haptics = not GameState.settings.haptics
-	_refresh()
-
-
-func _toggle_assist() -> void:
-	GameState.settings.braking_assist = not GameState.settings.braking_assist
-	_refresh()
+func _open_controls() -> void:
+	var panel := preload("res://scripts/ui/controls_panel.gd").new()
+	panel.closed.connect(_refresh)
+	add_child(panel)
 
 
 func _start() -> void:

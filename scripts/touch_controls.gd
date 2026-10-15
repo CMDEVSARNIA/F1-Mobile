@@ -18,6 +18,10 @@ const WHEEL_TRAVEL := 130.0  # px of drag for full lock (at 720p)
 var steer_mode := Steer.ARROWS
 var auto_throttle := true
 var haptics := true
+var size_mult := 1.0  # control size setting
+var wheel_sensitivity := 1.0  # less drag needed for full lock when higher
+## Steering on the right thumb, pedals on the left (GRID's "Mirrored Mode").
+var mirrored := false
 
 var _touches := {}  # finger index -> {zone, start, pos}
 var _u := 1.0  # UI scale relative to 720p
@@ -26,7 +30,7 @@ var _wheel_center := Vector2.ZERO
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
@@ -34,13 +38,31 @@ func _size() -> Vector2:
 	return get_viewport_rect().size if size == Vector2.ZERO else size
 
 
+func _update_scale() -> void:
+	_u = _size().y / 720.0 * size_mult
+
+
+## Layout is written for steering-left/pedals-right; these flip it.
+func _flip_x(x: float) -> float:
+	return _size().x - x if mirrored else x
+
+
+func _flip_rect(r: Rect2) -> Rect2:
+	return Rect2(_size().x - r.end.x, r.position.y, r.size.x, r.size.y) if mirrored else r
+
+
 # ------------------------------------------------------------ layout
 
+## [left arrow, right arrow] in screen space; left stays left when mirrored.
 func _arrow_centers() -> Array[Vector2]:
 	var s := _size()
-	return [Vector2(120 * _u, s.y - 130 * _u), Vector2(310 * _u, s.y - 130 * _u)]
+	var a := [120 * _u, 310 * _u]
+	if mirrored:
+		a = [s.x - 310 * _u, s.x - 120 * _u]
+	return [Vector2(a[0], s.y - 130 * _u), Vector2(a[1], s.y - 130 * _u)]
 
 
+## Pedal rects in un-mirrored layout space (use _flip_rect to draw).
 func _pedal_rects() -> Dictionary:
 	var s := _size()
 	var u := _u
@@ -54,8 +76,9 @@ func _pedal_rects() -> Dictionary:
 
 
 ## Generous hit areas: thumbs land roughly, never exactly.
-func _zone_at(p: Vector2) -> String:
+func _zone_at(screen_p: Vector2) -> String:
 	var s := _size()
+	var p := Vector2(_flip_x(screen_p.x), screen_p.y)
 	if p.y < s.y * 0.38:
 		return ""
 	var pedals := _pedal_rects()
@@ -69,10 +92,11 @@ func _zone_at(p: Vector2) -> String:
 			return "brake"
 	match steer_mode:
 		Steer.ARROWS:
+			# Outer button steers away from the screen centre on either side.
 			if p.x < 215 * _u:
-				return "left"
+				return "right" if mirrored else "left"
 			if p.x < 430 * _u:
-				return "right"
+				return "left" if mirrored else "right"
 		Steer.WHEEL:
 			if p.x < s.x * 0.45:
 				return "wheel"
@@ -84,7 +108,7 @@ func _zone_at(p: Vector2) -> String:
 func _input(event: InputEvent) -> void:
 	if not visible:
 		return
-	_u = _size().y / 720.0
+	_update_scale()
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			var z := _zone_at(event.position)
@@ -119,7 +143,7 @@ func _apply() -> void:
 	for idx in _touches:
 		var t: Dictionary = _touches[idx]
 		if t.zone == "wheel":
-			_steer = clampf((t.pos.x - t.start.x) / (WHEEL_TRAVEL * _u), -1.0, 1.0)
+			_steer = clampf((t.pos.x - t.start.x) * wheel_sensitivity / (WHEEL_TRAVEL * _u), -1.0, 1.0)
 		elif t.zone != "":
 			active[t.zone] = true
 	if active.has("left"):
@@ -149,7 +173,7 @@ func _buzz(ms: int) -> void:
 # ------------------------------------------------------------ drawing
 
 func _draw() -> void:
-	_u = _size().y / 720.0
+	_update_scale()
 	var active := {}
 	var wheel_touch := false
 	for idx in _touches:
@@ -165,13 +189,13 @@ func _draw() -> void:
 			_draw_arrow(c[1], 1.0, active.has("right"))
 		Steer.WHEEL:
 			var s := _size()
-			var center := _wheel_center if wheel_touch else Vector2(210 * _u, s.y - 190 * _u)
+			var center := _wheel_center if wheel_touch else Vector2(_flip_x(210 * _u), s.y - 190 * _u)
 			_draw_wheel(center, wheel_touch)
 
 	var pedals := _pedal_rects()
 	for name: String in pedals:
 		var col := GAS_COLOR if name == "throttle" else BRAKE_COLOR
-		_draw_pedal(pedals[name], col, "GAS" if name == "throttle" else "BRAKE", active.has(name), font)
+		_draw_pedal(_flip_rect(pedals[name]), col, "GAS" if name == "throttle" else "BRAKE", active.has(name), font)
 
 
 func _panel_box(fill: Color, border: Color, radius: float, width: float) -> StyleBoxFlat:

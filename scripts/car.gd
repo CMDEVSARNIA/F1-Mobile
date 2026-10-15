@@ -17,9 +17,18 @@ var is_player := false
 var controls_enabled := false
 var ai_skill := 0.95
 var ai_line := 0.0  # preferred lateral offset
-var braking_assist := false
-var steering_mode := 0  # 0 arrows, 1 wheel, 2 tilt, 3 tilt inverted
+var braking_assist := 0  # 0 off, 1 low, 2 high
+var steering_mode := 0  # 0 arrows, 1 wheel, 2 tilt
+var tilt_invert := false
+var steer_sensitivity := 1.0
+var steer_assist := 0  # 0 off, 1 low, 2 high
 var auto_throttle := false
+var tilt_neutral := 0.0  # roll angle that counts as "straight"
+
+const TILT_FULL_LOCK := 32.0  # degrees of roll for full lock at sensitivity 1
+const STEER_ASSIST_BLEND := [0.0, 0.3, 0.6]
+const STEER_ASSIST_EDGE := [0.0, 0.5, 1.0]
+const BRAKE_ASSIST_MARGIN := [INF, 1.10, 1.03]  # how far over the safe speed before it brakes
 var others: Array = []  # other cars, for AI avoidance
 
 # Inputs (0..1, steer -1..1)
@@ -112,27 +121,52 @@ func _physics_process(dt: float) -> void:
 
 func _player_input(dt: float) -> void:
 	var target := Input.get_axis("steer_left", "steer_right")
-	if steering_mode >= 2 and absf(target) < 0.01:
-		# Godot rotates sensor axes to match the screen, so steering-wheel
-		# style rolling shows up on x. Sign differs between devices, hence
-		# the "inverted" option in the menu.
-		var tilt := Input.get_accelerometer().x / 4.5
-		if steering_mode == 3:
-			tilt = -tilt
-		if absf(tilt) < 0.04:
-			tilt = 0.0
-		target = clampf(tilt, -1.0, 1.0)
-	steer = move_toward(steer, target, dt * 5.0)
+	if steering_mode == 2 and absf(target) < 0.01:
+		var deg := rad_to_deg(angle_difference(tilt_neutral, tilt_roll()))
+		if absf(deg) < 1.5:
+			deg = 0.0  # small deadzone so a steady hand drives straight
+		target = clampf(deg * steer_sensitivity / TILT_FULL_LOCK, -1.0, 1.0)
+		if tilt_invert:
+			target = -target
+	if steer_assist > 0 and absf(speed) > 5.0:
+		# Like Real Racing's steering assist: blend toward the racing line.
+		target = lerpf(target, _ideal_steer(lateral), STEER_ASSIST_BLEND[steer_assist])
+		# Edge protection: lean back toward the track as you run out of road.
+		var room := track.half_width(track_idx, lateral) - absf(lateral)
+		if room < 2.5:
+			var push: float = (2.5 - room) / 2.5 * STEER_ASSIST_EDGE[steer_assist]
+			target = clampf(target - signf(lateral) * push, -1.0, 1.0)
+	# Arrows/keys ramp in; sensitivity makes that ramp quicker or gentler.
+	steer = move_toward(steer, target, dt * 5.0 * steer_sensitivity)
 	brake = Input.get_action_strength("brake")
 	throttle = Input.get_action_strength("accelerate")
 	if auto_throttle:
 		# Like most mobile racers: the car accelerates by itself, you brake.
 		throttle = 0.0 if brake > 0.05 else 1.0
-	if braking_assist and speed > 15.0:
-		var limit := _target_speed_ahead() * 1.04
+	if braking_assist > 0 and speed > 15.0:
+		var limit: float = _target_speed_ahead() * BRAKE_ASSIST_MARGIN[braking_assist]
 		if speed > limit:
 			throttle = 0.0
 			brake = maxf(brake, clampf((speed - limit) / 6.0, 0.3, 1.0))
+
+
+## Phone roll in the screen plane. Works whether the phone is held upright
+## or reclined, as long as it isn't lying flat. Godot already rotates the
+## sensor axes to match the landscape screen.
+func tilt_roll() -> float:
+	var a := Input.get_accelerometer()
+	return atan2(a.x, absf(a.y) + 0.001)
+
+
+func calibrate_tilt() -> void:
+	tilt_neutral = tilt_roll()
+
+
+## Steering that would follow the track at `line` metres off centre.
+func _ideal_steer(line: float) -> float:
+	var look := clampf(absf(speed) * 0.32, 6.0, 30.0)
+	var local := global_transform.affine_inverse() * track.point_at(lap_pos + look, line)
+	return clampf(atan2(local.x, -local.z) * 3.0, -1.0, 1.0)
 
 
 ## Slowest planned speed over the next few track points.
@@ -145,7 +179,6 @@ func _target_speed_ahead() -> float:
 
 
 func _ai_input() -> void:
-	var look := clampf(absf(speed) * 0.32, 6.0, 30.0)
 	var line := ai_line
 	# Very simple overtaking/avoidance: pick the other side of a car ahead.
 	for o in others:
@@ -155,10 +188,7 @@ func _ai_input() -> void:
 		if gap > 0.0 and gap < 22.0 and absf(o.lateral - lateral) < 2.4:
 			var hw := track.half_width(track_idx, o.lateral) - 1.5
 			line = clampf(o.lateral + (3.2 if o.lateral < 0.0 else -3.2), -hw, hw)
-	var target := track.point_at(lap_pos + look, line)
-	var local := global_transform.affine_inverse() * target
-	var angle := atan2(local.x, -local.z)
-	steer = clampf(angle * 3.0, -1.0, 1.0)
+	steer = _ideal_steer(line)
 	var v_target := _target_speed_ahead() * ai_skill
 	if on_grass:
 		v_target = minf(v_target, 25.0)

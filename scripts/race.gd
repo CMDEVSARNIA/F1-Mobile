@@ -7,6 +7,7 @@ const Car = preload("res://scripts/car.gd")
 const ChaseCamera = preload("res://scripts/chase_camera.gd")
 const Hud = preload("res://scripts/hud.gd")
 const CarAudio = preload("res://scripts/car_audio.gd")
+const ControlsPanel = preload("res://scripts/ui/controls_panel.gd")
 
 enum State { COUNTDOWN, RACING, FINISHED }
 
@@ -47,10 +48,9 @@ func _ready() -> void:
 
 	hud = Hud.new()
 	add_child(hud)
-	hud.touch.steer_mode = mini(GameState.settings.steering, 2)
-	hud.touch.auto_throttle = GameState.settings.auto_throttle
-	hud.touch.haptics = GameState.settings.haptics
 	hud.touch.visible = DisplayServer.is_touchscreen_available() or OS.has_feature("mobile")
+	_apply_controls()
+	hud.controls_pressed.connect(_open_controls)
 	hud.minimap.setup(track, cars, player)
 	hud.pause_pressed.connect(_toggle_pause)
 	hud.resume_pressed.connect(_toggle_pause)
@@ -116,9 +116,6 @@ func _spawn_cars(opponents: int) -> void:
 		car.crossed_finish.connect(_on_crossed_finish)
 		if is_player:
 			player = car
-			car.braking_assist = GameState.settings.braking_assist
-			car.steering_mode = GameState.settings.steering
-			car.auto_throttle = GameState.settings.auto_throttle
 		else:
 			# Front of the grid is a touch quicker, like a real grid.
 			car.ai_skill = clampf(0.97 - slot * 0.006 + rng.randf_range(-0.01, 0.01), 0.88, 0.99)
@@ -150,11 +147,46 @@ func _physics_process(dt: float) -> void:
 			_show_results()
 
 
+## Push the current control settings into the player car and touch layout.
+func _apply_controls() -> void:
+	var s := GameState.settings
+	player.steering_mode = s.steering
+	player.tilt_invert = s.tilt_invert
+	player.steer_sensitivity = s.steer_sensitivity
+	player.steer_assist = s.steer_assist
+	player.auto_throttle = s.auto_throttle
+	player.braking_assist = s.braking_assist
+	var t := hud.touch
+	t.steer_mode = s.steering
+	t.auto_throttle = s.auto_throttle
+	t.haptics = s.haptics
+	t.size_mult = s.control_size
+	t.wheel_sensitivity = s.steer_sensitivity
+	t.mirrored = s.mirrored
+	t.self_modulate = Color(1, 1, 1, s.control_opacity)
+	t.release_all()
+
+
+func _open_controls() -> void:
+	var panel := ControlsPanel.new()
+	panel.in_race = true
+	panel.recalibrate_requested.connect(func():
+		player.calibrate_tilt()
+		hud.show_message("TILT CALIBRATED", 1.5))
+	panel.closed.connect(func():
+		_apply_controls()
+		hud.pause_panel.visible = true)
+	hud.pause_panel.visible = false
+	hud.root.add_child(panel)
+
+
 func _go() -> void:
 	state = State.RACING
 	hud.set_lights(0, false)
 	hud.show_message("GO!", 1.2)
 	_race_start = player.clock
+	# However the phone is held at lights out counts as "straight".
+	player.calibrate_tilt()
 	for c in cars:
 		c.controls_enabled = true
 		c.start_lap_timer()
