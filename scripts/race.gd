@@ -1,6 +1,9 @@
 extends Node3D
-## Sets up a race: track, environment, grid, camera, HUD. Runs the start
-## lights, positions, lap counting and results.
+## Sets up a session: track, environment, grid, camera, HUD. Runs the start
+## lights, positions, lap counting and results for three modes:
+##   race        quick race with the menu's laps/opponents
+##   season      a championship round (full grid, points, standings)
+##   time_trial  flying laps alone with a ghost of your best and a delta
 
 const Track = preload("res://scripts/track.gd")
 const Car = preload("res://scripts/car.gd")
@@ -8,6 +11,8 @@ const ChaseCamera = preload("res://scripts/chase_camera.gd")
 const Hud = preload("res://scripts/hud.gd")
 const CarAudio = preload("res://scripts/car_audio.gd")
 const ControlsPanel = preload("res://scripts/ui/controls_panel.gd")
+const CarModel = preload("res://scripts/car_model.gd")
+const GHOST_STRIDE := 5  # floats per ghost sample: t, lap_pos, x, z, yaw
 
 enum State { COUNTDOWN, RACING, FINISHED }
 
@@ -25,11 +30,24 @@ var _lights_out_at := 0.0
 var _finish_order: Array = []
 var _results_timer := -1.0
 var _race_start := 0.0
+var mode := "race"
+var time_trial := false
+var _awarded := {}
+# Time trial ghost
+var _ghost_data := PackedFloat32Array()
+var _rec := PackedFloat32Array()
+var _ghost: Node3D
+var _rec_tick := 0
+var _was_valid := true
 
 
 func _ready() -> void:
+	mode = GameState.mode
+	if mode == "season" and (not GameState.season_active() or GameState.season_complete()):
+		mode = "race"
+	time_trial = mode == "time_trial"
 	track_info = GameState.current_track()
-	laps = GameState.settings.laps
+	laps = 0 if time_trial else GameState.settings.laps
 	_build_environment()
 
 	track = Track.new()
@@ -38,7 +56,14 @@ func _ready() -> void:
 		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 		return
 
-	_spawn_cars(GameState.settings.opponents)
+	var opponents: int = GameState.settings.opponents
+	if mode == "season":
+		opponents = GameState.DRIVERS.size() - 1
+	elif time_trial:
+		opponents = 0
+	_spawn_cars(opponents)
+	if time_trial:
+		_setup_time_trial()
 
 	camera = ChaseCamera.new()
 	camera.target = player
@@ -53,6 +78,7 @@ func _ready() -> void:
 	hud.controls_pressed.connect(_open_controls)
 	hud.box_selected.connect(_on_box)
 	hud.pits_enabled = laps >= 2
+	hud.session_mode = mode
 	hud.minimap.setup(track, cars, player)
 	hud.pause_pressed.connect(_toggle_pause)
 	hud.resume_pressed.connect(_toggle_pause)
@@ -64,7 +90,14 @@ func _ready() -> void:
 	# 5 lights one per second, then a random hold before lights out.
 	_countdown = 0.0
 	_lights_out_at = 5.0 + randf_range(0.4, 1.8)
-	hud.show_message("%s  -  %d LAPS" % [track_info.name.to_upper(), laps], 3.0)
+	if time_trial:
+		_lights_out_at = 1.0
+		hud.show_message("%s  -  TIME TRIAL" % track_info.name.to_upper(), 2.5)
+	elif mode == "season":
+		hud.show_message("ROUND %d  -  %s  -  %d LAPS" % [GameState.season.round + 1,
+				track_info.name.to_upper(), laps], 3.0)
+	else:
+		hud.show_message("%s  -  %d LAPS" % [track_info.name.to_upper(), laps], 3.0)
 
 
 func _build_environment() -> void:
@@ -99,24 +132,40 @@ func _build_environment() -> void:
 	add_child(sun)
 
 
+## Driver indices into GameState.DRIVERS, pole first. Quick race: you start
+## at the back. Season: grid follows the championship, you behind any tie.
+func _grid_order(opponents: int) -> Array:
+	var ids := range(1, opponents + 1)
+	if mode == "season":
+		var pts: Dictionary = GameState.season.points
+		ids.append(0)
+		ids.sort_custom(func(a, b):
+			var pa: int = pts.get(GameState.DRIVERS[a].name, 0)
+			var pb: int = pts.get(GameState.DRIVERS[b].name, 0)
+			if pa != pb:
+				return pa > pb
+			return (a if a > 0 else 99) < (b if b > 0 else 99))
+		return ids
+	ids.append(0)
+	return ids
+
+
 func _spawn_cars(opponents: int) -> void:
-	var n := 1 + opponents
-	# Player starts at the back half of the grid for a bit of a fight.
-	var player_slot := n - 1 if opponents > 0 else 0
+	var order := _grid_order(opponents)
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var ai_i := 1
-	for slot in n:
+	for slot in order.size():
+		var idx: int = order[slot]
 		var car := Car.new()
 		add_child(car)
-		var is_player := slot == player_slot
-		var d: Dictionary = GameState.DRIVERS[0] if is_player else GameState.DRIVERS[ai_i]
+		var is_player := idx == 0
+		var d: Dictionary = GameState.DRIVERS[idx]
 		car.setup(track, d.color, slot, d.get("accent", Color.WHITE))
 		car.driver_name = d.name
 		car.is_player = is_player
 		car.lap_completed.connect(_on_lap_completed)
 		car.crossed_finish.connect(_on_crossed_finish)
-		car.team = 0 if is_player else ai_i
+		car.team = idx
 		car.race_laps = laps
 		car.tyre_wear_enabled = laps >= 2
 		car.mandatory_two = laps >= 3
@@ -128,10 +177,9 @@ func _spawn_cars(opponents: int) -> void:
 			# Strategy mix like a real grid: mostly mediums, some softs/hards.
 			var roll := rng.randf()
 			car.set_compound(0 if roll < 0.3 else (1 if roll < 0.8 else 2))
-			# Front of the grid is a touch quicker, like a real grid.
-			car.ai_skill = clampf(0.97 - slot * 0.006 + rng.randf_range(-0.01, 0.01), 0.88, 0.99)
+			# Each driver has a pace of their own, plus a little day-to-day form.
+			car.ai_skill = clampf(0.975 - (idx - 1) * 0.005 + rng.randf_range(-0.006, 0.006), 0.9, 0.99)
 			car.ai_line = rng.randf_range(-1.5, 1.5)
-			ai_i += 1
 		var audio := CarAudio.new()
 		audio.car = car
 		audio.positional = not is_player
@@ -146,12 +194,14 @@ func _physics_process(dt: float) -> void:
 		State.COUNTDOWN:
 			_countdown += dt
 			var lit := clampi(int(_countdown), 0, 5)
-			hud.set_lights(lit, true)
+			hud.set_lights(lit, not time_trial)
 			if _countdown >= _lights_out_at:
 				_go()
 		State.RACING, State.FINISHED:
 			pass
 	_update_hud()
+	if time_trial:
+		_time_trial_tick()
 	if _results_timer > 0.0:
 		_results_timer -= dt
 		if _results_timer <= 0.0:
@@ -287,6 +337,9 @@ func _on_box(compound: int) -> void:
 func _on_lap_completed(car: Car, lap_time: float) -> void:
 	if car != player:
 		return
+	if time_trial:
+		_time_trial_lap(lap_time)
+		return
 	var best := GameState.record_lap(track_info.id, lap_time)
 	var txt := "LAP  " + GameState.format_time(lap_time)
 	if best:
@@ -295,7 +348,7 @@ func _on_lap_completed(car: Car, lap_time: float) -> void:
 
 
 func _on_crossed_finish(car: Car) -> void:
-	if car.finished or car.lap <= laps:
+	if time_trial or car.finished or car.lap <= laps:
 		return
 	car.finished = true
 	car.finish_time = car.clock
@@ -336,4 +389,96 @@ func _show_results() -> void:
 			t += "  (+%ds pen)" % int(c.penalty)
 		rows.append({"pos": i + 1, "name": c.driver_name, "time": t, "stops": c.pit_stops,
 				"best": GameState.format_time(c.best_lap), "is_player": c == player})
-	hud.show_results(rows)
+	if mode == "season" and _awarded.is_empty():
+		var gained := GameState.season_award(order.map(func(c): return c.driver_name))
+		_awarded = gained
+		for r in rows:
+			r["pts"] = gained.get(r.name, 0)
+	hud.show_results(rows, mode == "season")
+
+
+# ------------------------------------------------------------ time trial
+
+func _setup_time_trial() -> void:
+	player.place_at(-260.0)
+	player.flying_start = true
+	player.drs_from_lap = 0
+	player.tyre_wear_enabled = false
+	player.set_compound(0)
+	_ghost_data = GameState.load_ghost(track_info.id)
+	_ghost = CarModel.new()
+	_ghost.team_color = Color(0.4, 0.85, 1.0)
+	_ghost.accent_color = Color.WHITE
+	add_child(_ghost)
+	for mi: MeshInstance3D in _ghost.find_children("*", "MeshInstance3D", true, false):
+		mi.transparency = 0.6
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_ghost.visible = false
+
+
+func _time_trial_tick() -> void:
+	if player.lap < 1:
+		return
+	var t := player.clock - player.lap_start_time
+	# Record ~20 samples a second of the lap in progress.
+	_rec_tick += 1
+	if _rec_tick % 3 == 0:
+		var xf := player.global_transform
+		_rec.append_array([t, player.lap_pos, xf.origin.x, xf.origin.z, player.rotation.y])
+	if _was_valid and not player.lap_valid:
+		hud.show_message("TRACK LIMITS - LAP INVALID", 2.0)
+	_was_valid = player.lap_valid
+	# Ghost replays the best lap at the same lap time.
+	var n := _ghost_data.size() / GHOST_STRIDE
+	if n > 1 and t <= _ghost_data[(n - 1) * GHOST_STRIDE]:
+		var i := _ghost_index(t, 0)
+		var a := i * GHOST_STRIDE
+		var b := mini(i + 1, n - 1) * GHOST_STRIDE
+		var span := _ghost_data[b] - _ghost_data[a]
+		var f := 0.0 if span <= 0.0 else clampf((t - _ghost_data[a]) / span, 0.0, 1.0)
+		_ghost.visible = true
+		_ghost.position = Vector3(lerpf(_ghost_data[a + 2], _ghost_data[b + 2], f), 0.0,
+				lerpf(_ghost_data[a + 3], _ghost_data[b + 3], f))
+		_ghost.rotation.y = lerp_angle(_ghost_data[a + 4], _ghost_data[b + 4], f)
+		# Delta: our lap time minus the ghost's time at the same point of the lap.
+		var j := _ghost_index(player.lap_pos, 1)
+		var pa := j * GHOST_STRIDE
+		var pb := mini(j + 1, n - 1) * GHOST_STRIDE
+		var ds := _ghost_data[pb + 1] - _ghost_data[pa + 1]
+		var g := 0.0 if ds <= 0.0 else clampf((player.lap_pos - _ghost_data[pa + 1]) / ds, 0.0, 1.0)
+		hud.set_delta(t - lerpf(_ghost_data[pa], _ghost_data[pb], g))
+	else:
+		_ghost.visible = false
+		hud.set_delta(NAN)
+
+
+## Last sample whose field `k` (0 = time, 1 = lap distance) is <= v.
+func _ghost_index(v: float, k: int) -> int:
+	var lo := 0
+	var hi := _ghost_data.size() / GHOST_STRIDE - 1
+	while lo < hi:
+		var mid := (lo + hi + 1) >> 1
+		if _ghost_data[mid * GHOST_STRIDE + k] <= v:
+			lo = mid
+		else:
+			hi = mid - 1
+	return lo
+
+
+func _time_trial_lap(lap_time: float) -> void:
+	var samples := _rec
+	_rec = PackedFloat32Array()
+	_was_valid = true
+	if not player.last_lap_valid:
+		hud.show_message("LAP " + GameState.format_time(lap_time) + "\nINVALID", 2.5)
+		return
+	GameState.record_lap(track_info.id, lap_time)
+	var prev: float = GameState.tt_best.get(track_info.id, INF)
+	var txt := "LAP  " + GameState.format_time(lap_time)
+	if lap_time < prev:
+		GameState.save_ghost(track_info.id, lap_time, samples)
+		_ghost_data = samples
+		txt += "\nNEW BEST - GHOST SAVED" if prev < INF else "\nGHOST SAVED"
+	else:
+		txt += "\n+%.3f" % (lap_time - prev)
+	hud.show_message(txt, 2.5)

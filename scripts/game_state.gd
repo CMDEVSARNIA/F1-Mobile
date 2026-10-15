@@ -65,6 +65,21 @@ var settings := {
 }
 
 var best_laps := {}  # track id -> seconds
+var tt_best := {}  # track id -> seconds, time trial only (has a ghost)
+
+## Which game mode the menu is on: "race", "season" or "time_trial".
+var mode := "race"
+
+const POINTS := [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
+const SEASON_LENGTHS := {
+	"short": ["melbourne", "suzuka", "silverstone", "spa", "monza"],
+	"medium": ["melbourne", "shanghai", "suzuka", "catalunya", "montreal", "silverstone",
+			"spa", "monza", "austin", "saopaulo"],
+	"full": ["melbourne", "shanghai", "suzuka", "sakhir", "catalunya", "montreal", "spielberg",
+			"silverstone", "spa", "budapest", "zandvoort", "monza", "austin", "mexicocity",
+			"saopaulo", "yasmarina"],
+}
+var season := {}
 
 
 func _ready() -> void:
@@ -73,7 +88,79 @@ func _ready() -> void:
 
 
 func current_track() -> Dictionary:
+	if mode == "season" and season_active() and not season_complete():
+		return TRACKS[track_index(season.calendar[season.round])]
 	return TRACKS[clampi(settings.track, 0, TRACKS.size() - 1)]
+
+
+func track_index(id: String) -> int:
+	for i in TRACKS.size():
+		if TRACKS[i].id == id:
+			return i
+	return 0
+
+
+# ------------------------------------------------------------ season
+
+func season_active() -> bool:
+	return not season.is_empty()
+
+
+func season_complete() -> bool:
+	return season_active() and season.round >= season.calendar.size()
+
+
+func season_start(length: String) -> void:
+	var pts := {}
+	for d in DRIVERS:
+		pts[d.name] = 0
+	season = {"length": length, "calendar": SEASON_LENGTHS[length].duplicate(), "round": 0,
+			"points": pts, "winners": []}
+	save()
+
+
+## `order` is driver names in finishing order. Returns points scored by each.
+func season_award(order: Array) -> Dictionary:
+	var gained := {}
+	for i in order.size():
+		var p: int = POINTS[i] if i < POINTS.size() else 0
+		season.points[order[i]] = season.points.get(order[i], 0) + p
+		gained[order[i]] = p
+	season.winners.append(order[0])
+	season.round += 1
+	save()
+	return gained
+
+
+## [[name, points], ...] best first; ties keep driver order.
+func season_standings() -> Array:
+	var rows := []
+	for d in DRIVERS:
+		rows.append([d.name, season.points.get(d.name, 0) if season_active() else 0])
+	rows.sort_custom(func(a, b): return a[1] > b[1])
+	return rows
+
+
+# ------------------------------------------------------------ ghosts
+
+func ghost_path(track_id: String) -> String:
+	return "user://ghost_%s.bin" % track_id
+
+
+func save_ghost(track_id: String, seconds: float, samples: PackedFloat32Array) -> void:
+	tt_best[track_id] = seconds
+	var f := FileAccess.open(ghost_path(track_id), FileAccess.WRITE)
+	if f:
+		f.store_var(samples)
+	save()
+
+
+func load_ghost(track_id: String) -> PackedFloat32Array:
+	if not tt_best.has(track_id) or not FileAccess.file_exists(ghost_path(track_id)):
+		return PackedFloat32Array()
+	var f := FileAccess.open(ghost_path(track_id), FileAccess.READ)
+	var v = f.get_var() if f else null
+	return v if v is PackedFloat32Array else PackedFloat32Array()
 
 
 func record_lap(track_id: String, seconds: float) -> bool:
@@ -90,6 +177,10 @@ func save() -> void:
 		cfg.set_value("settings", key, settings[key])
 	for key in best_laps:
 		cfg.set_value("best_laps", key, best_laps[key])
+	for key in tt_best:
+		cfg.set_value("tt_best", key, tt_best[key])
+	cfg.set_value("state", "mode", mode)
+	cfg.set_value("state", "season", season)
 	cfg.save(SETTINGS_PATH)
 
 
@@ -105,6 +196,11 @@ func _load() -> void:
 		settings.tilt_invert = true
 	if settings.braking_assist is bool:
 		settings.braking_assist = 2 if settings.braking_assist else 0
+	if cfg.has_section("tt_best"):
+		for key in cfg.get_section_keys("tt_best"):
+			tt_best[key] = cfg.get_value("tt_best", key)
+	mode = cfg.get_value("state", "mode", mode)
+	season = cfg.get_value("state", "season", {})
 	if cfg.has_section("best_laps"):
 		for key in cfg.get_section_keys("best_laps"):
 			best_laps[key] = cfg.get_value("best_laps", key)

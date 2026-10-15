@@ -87,6 +87,11 @@ var team := 0
 ## F1 rule: use two different dry compounds in the race (3+ laps here).
 var mandatory_two := false
 var penalty := 0.0  # seconds added at the flag
+## Time trial: the clock starts at the line (flying lap), and running wide
+## past the kerbs invalidates the lap, like qualifying.
+var flying_start := false
+var lap_valid := true
+var last_lap_valid := true
 
 # Pit stops: request with BOX, the car then drives itself through the lane.
 var pit_requested := false
@@ -124,6 +129,16 @@ func setup(p_track: Track, color: Color, slot: int, accent := Color.WHITE) -> vo
 
 func place_on_grid(slot: int) -> void:
 	global_transform = track.transform_at(-track.grid_distance(slot), track.grid_lateral(slot))
+	velocity = Vector3.ZERO
+	track_idx = track.closest_index_global(global_position)
+	_update_track_state()
+	lap = 0
+	race_dist = lap_pos - track.length
+
+
+## Put the car `s` metres along the lap (negative = before the line).
+func place_at(s: float) -> void:
+	global_transform = track.transform_at(s, 0.0)
 	velocity = Vector3.ZERO
 	track_idx = track.closest_index_global(global_position)
 	_update_track_state()
@@ -367,6 +382,8 @@ func _update_track_state() -> void:
 	_update_drs(prev_pos)
 	var hw := track.half_width(track_idx, lateral)
 	on_grass = absf(lateral) > hw + Track.KERB_WIDTH * 0.8 and not track.on_pit_surface(lap_pos, lateral)
+	if on_grass and lap >= 1:
+		lap_valid = false
 	wrong_way = absf(speed) > 5.0 and (-global_transform.basis.z).dot(track.tangents[track_idx]) < -0.3
 	if absf(lateral) > hw + Track.KERB_WIDTH + Track.RUNOFF + 25.0:
 		reset_to_track()
@@ -537,7 +554,11 @@ func _on_cross_line() -> void:
 	if lap <= _max_lap:
 		return  # re-crossing after reversing or a reset
 	_max_lap = lap
+	last_lap_valid = lap_valid
+	lap_valid = true
 	if lap <= 1:
+		if flying_start:
+			lap_start_time = clock
 		return
 	var t := clock - lap_start_time
 	lap_start_time = clock

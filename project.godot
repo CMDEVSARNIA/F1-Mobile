@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="F1 Mobile"
+config/name="Formula Force"
 config/description="Personal 3D open-wheel racing game for Android."
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.4", "Mobile")

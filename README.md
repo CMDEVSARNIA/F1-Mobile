@@ -1,6 +1,6 @@
-# F1 Mobile
+# Formula Force
 
-A personal 3D open-wheel racing game for Android, built with **Godot 4.4**.
+**Formula Force** is a personal 3D open-wheel racing game for Android, built with **Godot 4.4**.
 It has real circuit layouts at real scale, an F1-style car model, AI opponents,
 start lights, lap timing and touch or tilt controls. Everything is generated from
 code and data, so the project runs with no third-party art.
@@ -16,6 +16,7 @@ code and data, so the project runs with no third-party art.
 | Clean low-poly modern F1 car modelled in code: lofted nose and sidepods, halo, multi-element wings, DRS flap, compound-coloured tyres, two-tone team liveries | `scripts/lowpoly_car.gd`, `scripts/car_model.gd` |
 | DRS and slipstream: zones auto-placed on each circuit's two longest straights with detection boards, 1-second rule from lap 2, tap DRS button (or automatic), flap animates, closes on braking; tow behind any car within 30 m | `scripts/track.gd`, `scripts/car.gd` |
 | Tyres and pit stops: soft/medium/hard with wear scaled to race length and a grip cliff, two-compound rule (+10 s penalty), pit lane fitted to each main straight with limiter, pit wall and team garages; tap BOX and pick a compound, the car drives the stop; AI strategies | `scripts/car.gd`, `scripts/track.gd`, `scripts/ui/tyre_gauge.gd` |
+| Modes: Quick race; Season (5/10/16-round calendars, F1 points, grid in championship order, standings and champion screen, saved progress); Time trial (flying laps on softs, ghost of your best lap, live delta, track-limit invalidation) | `scripts/main_menu.gd`, `scripts/race.gd`, `scripts/game_state.gd` |
 | Race flow: 5 red lights, random hold, lights out, laps, positions, wrong-way warning, results, personal bests saved per track | `scripts/race.gd` |
 | Mobile controls modelled on GRID Autosport / Real Racing: arrow buttons, drag-to-steer wheel or tilt; pedal-shaped brake/gas; auto-throttle by default (manual "Pro" option); braking assist; haptic taps | `scripts/touch_controls.gd` |
 | Controls & assists screen (main menu and pause): steering style, sensitivity, tilt direction + auto/manual tilt calibration, steering assist with edge protection, braking assist levels, auto/manual throttle, button size and opacity, mirrored layout, vibration | `scripts/ui/controls_panel.gd`, `scripts/car.gd` |
@@ -41,8 +42,8 @@ One-time setup:
 3. Godot creates a debug keystore automatically. Debug builds are fine for personal use.
 
 Then **Project → Export → Android** (the preset is already in `export_presets.cfg`) →
-**Export Project** → `build/F1Mobile.apk`. Install it with
-`adb install -r build/F1Mobile.apk`, or copy the APK to the phone and open it after
+**Export Project** → `build/FormulaForce.apk`. Install it with
+`adb install -r build/FormulaForce.apk`, or copy the APK to the phone and open it after
 allowing "install unknown apps".
 
 Even quicker: plug the phone in with USB debugging enabled and press the

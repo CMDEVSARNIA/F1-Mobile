@@ -30,6 +30,10 @@ var tyre_gauge: Control
 var box_button: Button
 var box_picker: HBoxContainer
 var pits_enabled := true
+var session_mode := "race"
+var delta_label: Label
+var _again_button: Button
+var _results_title: Label
 var _box_requested := false
 var message_label: Label
 var lights: Array[Panel] = []
@@ -64,6 +68,7 @@ func _ready() -> void:
 	var tr := _vbox(root)
 	_place(tr, Control.PRESET_TOP_RIGHT, -20, 14, -20, 14)
 	time_label = _label(tr, "0:00.000", 36, HORIZONTAL_ALIGNMENT_RIGHT)
+
 	last_label = _label(tr, "LAST --:--.---", 20, HORIZONTAL_ALIGNMENT_RIGHT)
 	best_label = _label(tr, "BEST --:--.---", 20, HORIZONTAL_ALIGNMENT_RIGHT)
 
@@ -79,6 +84,14 @@ func _ready() -> void:
 		var ib := IconButton.new(spec[0])
 		ib.pressed.connect(spec[1].emit)
 		buttons.add_child(ib)
+
+	# Time-trial delta, top centre under the buttons
+	delta_label = Label.new()
+	delta_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_style_label(delta_label, 34)
+	root.add_child(delta_label)
+	_place(delta_label, Control.PRESET_CENTER_TOP, -120, 80, 120, 124)
+	delta_label.visible = false
 
 	# Bottom centre: driver display with shift lights
 	dashboard = Dashboard.new()
@@ -184,12 +197,18 @@ func show_message(text: String, seconds := 2.0) -> void:
 
 
 func update_telemetry(car, position: int, total: int, laps: int, now: float, racing: bool) -> void:
-	pos_label.text = "P%d/%d" % [position, total]
-	lap_label.text = "LAP %d/%d" % [clampi(car.lap, 1, laps) if racing or car.lap > 0 else 0, laps]
-	var lap_t: float = now - car.lap_start_time if racing else 0.0
-	time_label.text = GameState.format_time(lap_t) if racing else "0:00.000"
+	if session_mode == "time_trial":
+		pos_label.text = "TIME TRIAL"
+		lap_label.text = "OUT LAP" if car.lap < 1 else "LAP %d" % car.lap
+	else:
+		pos_label.text = "P%d/%d" % [position, total]
+		lap_label.text = "LAP %d/%d" % [clampi(car.lap, 1, laps) if racing or car.lap > 0 else 0, laps]
+	var lap_t: float = now - car.lap_start_time if racing and car.lap >= (1 if car.flying_start else 0) else 0.0
+	time_label.text = GameState.format_time(lap_t) if lap_t > 0.0 else "0:00.000"
 	last_label.text = "LAST " + GameState.format_time(car.lap_times[-1] if car.lap_times.size() else 0.0)
 	best_label.text = "BEST " + GameState.format_time(car.best_lap)
+	if session_mode == "time_trial":
+		best_label.text = "BEST " + GameState.format_time(GameState.tt_best.get(GameState.current_track().id, 0.0))
 	dashboard.speed_kmh = int(absf(car.speed) * 3.6)
 	dashboard.gear_text = "R" if car.speed < -0.5 else ("N" if absf(car.speed) < 0.5 and car.throttle < 0.05 else str(car.gear))
 	dashboard.rpm = car.rpm
@@ -201,7 +220,7 @@ func update_telemetry(car, position: int, total: int, laps: int, now: float, rac
 	tyre_gauge.compound_color = comp.color
 	tyre_gauge.life = 1.0 - car.wear
 	tyre_gauge.enabled = car.tyre_wear_enabled
-	box_button.visible = pits_enabled and racing and not car.finished
+	box_button.visible = pits_enabled and racing and not car.finished and session_mode != "time_trial"
 	_box_requested = car.pit_requested
 	box_button.disabled = car.in_pit
 	box_button.text = "PIT LANE" if car.in_pit else ("BOX: %s  ✕" % COMPOUND_NAMES[car.pit_compound] if car.pit_requested else "BOX")
@@ -223,7 +242,22 @@ func show_pause(on: bool) -> void:
 	touch.release_all()
 
 
-func show_results(rows: Array) -> void:
+## Live gap to the ghost in time trial; NAN hides it.
+func set_delta(d: float) -> void:
+	delta_label.visible = not is_nan(d)
+	if delta_label.visible:
+		delta_label.text = "%+.3f" % d
+		delta_label.add_theme_color_override("font_color",
+				Color(0.3, 1.0, 0.45) if d <= 0.0 else Color(1.0, 0.3, 0.25))
+
+
+func show_results(rows: Array, season := false) -> void:
+	if season:
+		_results_title.text = "ROUND RESULT"
+		_again_button.text = "STANDINGS  ›" if GameState.season_complete() else "NEXT ROUND  ›"
+		if GameState.season_complete():
+			_again_button.pressed.disconnect(restart_pressed.emit)
+			_again_button.pressed.connect(menu_pressed.emit)
 	for c in results_list.get_children():
 		c.queue_free()
 	for r in rows:
@@ -239,6 +273,10 @@ func show_results(rows: Array) -> void:
 		c.custom_minimum_size = Vector2(150, 0)
 		var st := _label(line, "%d stop%s" % [r.stops, "" if r.stops == 1 else "s"], 20)
 		st.custom_minimum_size = Vector2(80, 0)
+		if r.has("pts"):
+			var pl := _label(line, "+%d" % r.pts if r.pts > 0 else "", 22)
+			pl.custom_minimum_size = Vector2(50, 0)
+			pl.add_theme_color_override("font_color", Color(0.3, 1.0, 0.45))
 		_label(line, "best " + r.best, 20)
 		results_list.add_child(line)
 	results_panel.visible = true
@@ -270,14 +308,15 @@ func _build_pause() -> void:
 func _build_results() -> void:
 	results_panel = _panel()
 	var box: VBoxContainer = results_panel.get_child(0)
-	_label(box, "RESULTS", 40, HORIZONTAL_ALIGNMENT_CENTER)
+	_results_title = _label(box, "RESULTS", 40, HORIZONTAL_ALIGNMENT_CENTER)
 	results_list = VBoxContainer.new()
 	box.add_child(results_list)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 20)
 	box.add_child(row)
-	GameState.style_primary(_button(row, "RACE AGAIN", restart_pressed.emit))
+	_again_button = _button(row, "RACE AGAIN", restart_pressed.emit)
+	GameState.style_primary(_again_button)
 	_button(row, "MAIN MENU", menu_pressed.emit)
 	results_panel.visible = false
 
