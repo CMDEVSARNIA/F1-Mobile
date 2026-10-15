@@ -61,6 +61,7 @@ var settings := {
 	"haptics": true,
 	"auto_drs": false,
 	"start_compound": 1,
+	"music": true,
 	"camera": 0,
 }
 
@@ -82,9 +83,44 @@ const SEASON_LENGTHS := {
 var season := {}
 
 
+const MENU_MUSIC := "res://assets/music/menu_theme.ogg"
+const MUSIC_DB := -8.0
+
+var _music: AudioStreamPlayer
+var _music_tween: Tween
+
+
 func _ready() -> void:
 	_setup_input()
 	_load()
+	# Lives on this autoload so the menu theme carries on across menu screens.
+	_music = AudioStreamPlayer.new()
+	_music.stream = load(MENU_MUSIC)
+	_music.volume_db = -60.0
+	add_child(_music)
+
+
+func play_menu_music() -> void:
+	if not settings.music:
+		stop_music(0.3)
+		return
+	if not _music.playing:
+		_music.play()
+	_fade_music(MUSIC_DB, 1.5)
+
+
+func stop_music(seconds := 1.0) -> void:
+	if _music.playing:
+		_fade_music(-60.0, seconds, true)
+
+
+func _fade_music(db: float, seconds: float, stop_after := false) -> void:
+	if _music_tween:
+		_music_tween.kill()
+	_music_tween = create_tween()
+	_music_tween.tween_property(_music, "volume_db", db, seconds)
+	if stop_after:
+		_music_tween.tween_callback(_music.stop)
 
 
 func current_track() -> Dictionary:

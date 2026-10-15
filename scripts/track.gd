@@ -37,6 +37,7 @@ const PIT_LANE_WIDTH := 8.0
 const PIT_SPEED := 22.0  # 80 km/h limiter
 const PIT_RAMP := 110.0  # entry/exit blend length (shrinks on short straights)
 var pit_ramp := PIT_RAMP
+var _gantry_lights: Array[StandardMaterial3D] = []
 var pit_box_spacing := 24.0
 var pit_side := 1.0
 var pit_offset := 20.0  # lane centre distance from the centreline (full section)
@@ -56,6 +57,8 @@ func build(csv_path: String) -> bool:
 	_compute_pit()
 	_build_meshes()
 	_build_pit()
+	_build_gantry()
+	_build_boards()
 	_build_drs_markers()
 	_build_scenery()
 	return true
@@ -200,7 +203,8 @@ func _build_drs_markers() -> void:
 			# Board on a post beside the track, facing oncoming cars
 			var side := 1.0 if not is_near_track(points[i] + rights[i] * (width_right[i] + 5.0), 0.0) else -1.0
 			var at := points[i] + rights[i] * side * ((width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + 2.5)
-			var basis := Basis.looking_at(-tangents[i], Vector3.UP)
+			# Text reads from +Z: face oncoming cars by pointing -Z down the track.
+			var basis := Basis.looking_at(tangents[i], Vector3.UP)
 			var p := MeshInstance3D.new()
 			var pm := BoxMesh.new()
 			pm.size = Vector3(0.12, 2.2, 0.12)
@@ -429,6 +433,87 @@ func _build_pit() -> void:
 		mark.material_override = team_mat
 		mark.transform = Transform3D(basis, point_at(pit_in + d, pit_lateral(d) + pit_side * 1.8) + Vector3(0, _road_y(i) + 0.012, 0))
 		add_child(mark)
+
+
+# ---------------------------------------------------------------- dressing
+
+## Start gantry across the line; its five lights follow the start sequence.
+func _build_gantry() -> void:
+	var grey := StandardMaterial3D.new()
+	grey.albedo_color = Color(0.22, 0.22, 0.25)
+	var basis := Basis.looking_at(tangents[0], Vector3.UP)
+	var r := rights[0]
+	var y := Vector3(0, _road_y(0), 0)
+	var left := points[0] - r * (width_left[0] + 2.5) + y
+	var right := points[0] + r * (width_right[0] + 2.5) + y
+	for p: Vector3 in [left, right]:
+		_box(Vector3(0.7, 7.6, 0.7), p + Vector3(0, 3.8, 0), basis, grey)
+	var mid := (left + right) / 2.0
+	_box(Vector3(left.distance_to(right) + 0.7, 0.9, 0.9), mid + Vector3(0, 7.2, 0), basis, grey)
+	var housing := StandardMaterial3D.new()
+	housing.albedo_color = Color(0.05, 0.05, 0.06)
+	for k in 5:
+		var c := mid + r * (k - 2) * 1.1 + Vector3(0, 6.0, 0) - tangents[0] * 0.5
+		_box(Vector3(0.9, 1.8, 0.35), c, basis, housing)
+		var lamp := StandardMaterial3D.new()
+		lamp.albedo_color = Color(0.2, 0.02, 0.02)
+		lamp.emission_enabled = true
+		lamp.emission = Color(1.0, 0.05, 0.03)
+		lamp.emission_energy_multiplier = 0.0
+		_gantry_lights.append(lamp)
+		for dy: float in [-0.4, 0.4]:
+			var bulb := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = 0.28
+			sm.height = 0.56
+			sm.radial_segments = 10
+			sm.rings = 5
+			bulb.mesh = sm
+			bulb.material_override = lamp
+			bulb.position = c + Vector3(0, dy, 0) - tangents[0] * 0.2
+			add_child(bulb)
+
+
+func set_gantry_lights(n: int) -> void:
+	for k in _gantry_lights.size():
+		var on := k < n
+		_gantry_lights[k].albedo_color = Color(1.0, 0.1, 0.05) if on else Color(0.2, 0.02, 0.02)
+		_gantry_lights[k].emission_energy_multiplier = 1.2 if on else 0.0
+
+
+## Our own trackside boards along the start straight.
+func _build_boards() -> void:
+	var board := StandardMaterial3D.new()
+	board.albedo_color = Color(0.88, 0.02, 0.0)
+	for s: float in [-120.0, -60.0, 60.0, 120.0, 180.0]:
+		var i := index_at_distance(s)
+		var side := -pit_side
+		var w := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 0.4
+		var p := points[i] + rights[i] * side * w + Vector3(0, 1.9, 0)
+		if is_near_track(p, KERB_WIDTH + 2.0):
+			continue
+		# Label3D text reads from its +Z side, so -Z points away from the track.
+		var basis := Basis.looking_at(rights[i] * side, Vector3.UP)
+		_box(Vector3(9.0, 1.6, 0.15), p, basis, board)
+		var label := Label3D.new()
+		label.text = "FORMULA FORCE"
+		label.font_size = 96
+		label.pixel_size = 0.009
+		label.outline_size = 0
+		label.modulate = Color.WHITE
+		label.transform = Transform3D(basis, p - rights[i] * side * 0.1)
+		add_child(label)
+
+
+func _box(size: Vector3, pos: Vector3, basis: Basis, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var b := BoxMesh.new()
+	b.size = size
+	mi.mesh = b
+	mi.material_override = mat
+	mi.transform = Transform3D(basis, pos)
+	add_child(mi)
+	return mi
 
 
 ## Like _ribbon but not closed into a loop.

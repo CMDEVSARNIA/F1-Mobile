@@ -42,6 +42,7 @@ var _was_valid := true
 
 
 func _ready() -> void:
+	GameState.stop_music(1.2)
 	mode = GameState.mode
 	if mode == "season" and (not GameState.season_active() or GameState.season_complete()):
 		mode = "race"
@@ -195,6 +196,7 @@ func _physics_process(dt: float) -> void:
 			_countdown += dt
 			var lit := clampi(int(_countdown), 0, 5)
 			hud.set_lights(lit, not time_trial)
+			track.set_gantry_lights(0 if time_trial else lit)
 			if _countdown >= _lights_out_at:
 				_go()
 		State.RACING, State.FINISHED:
@@ -245,6 +247,7 @@ func _open_controls() -> void:
 func _go() -> void:
 	state = State.RACING
 	hud.set_lights(0, false)
+	track.set_gantry_lights(0)
 	hud.show_message("GO!", 1.2)
 	_race_start = player.clock
 	# However the phone is held at lights out counts as "straight".

@@ -21,6 +21,7 @@ const OPTIONS := [
 	["mirrored", "Layout", [false, true], ["Steer left", "Steer right"]],
 	["auto_drs", "DRS", [false, true], ["Tap to open", "Automatic"]],
 	["haptics", "Vibration", [true, false], ["On", "Off"]],
+	["music", "Menu music", [true, false], ["On", "Off"]],
 ]
 
 var in_race := false

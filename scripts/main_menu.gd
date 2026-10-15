@@ -66,6 +66,7 @@ func _ready() -> void:
 	if GameState.season_active():
 		_season_length = GameState.season.length
 	_rebuild()
+	GameState.play_menu_music()
 
 
 func _set_mode(m: String) -> void:
@@ -249,7 +250,9 @@ func _abandon_season() -> void:
 
 func _open_controls() -> void:
 	var panel := preload("res://scripts/ui/controls_panel.gd").new()
-	panel.closed.connect(_rebuild)
+	panel.closed.connect(func():
+		_rebuild()
+		GameState.play_menu_music())
 	add_child(panel)
 
 

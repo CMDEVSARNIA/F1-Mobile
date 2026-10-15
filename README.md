@@ -75,5 +75,6 @@ Even quicker: plug the phone in with USB debugging enabled and press the
 ## Licences
 
 - Track centerlines: TUM racetrack-database, **LGPL-3.0** (`tracks/LICENSE-LGPL-3.0.txt`).
+- Menu music: your own track (made with Suno), converted to OGG in `assets/music/`.
 - Forest/tent models and engine/skid/impact sounds: Kenney Starter Kit Racing, **CC0** (`assets/kenney/LICENSE.md`).
 - No team names, logos or liveries are included. Drivers and colours are fictional.
