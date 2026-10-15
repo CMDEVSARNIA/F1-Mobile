@@ -9,7 +9,7 @@ code and data, so the project runs with no third-party art.
 
 | Feature | Where |
 | --- | --- |
-| Real circuits (Monza, Silverstone, Spa, Suzuka) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
+| 20 real circuits in calendar order (Albert Park to Yas Marina, plus Sepang, Hockenheim, Nurburgring, Sochi) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
 | Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
 | Arcade car physics: bicycle-model steering, downforce grip that grows with speed (~2g slow, ~5g fast), ~335 km/h top speed, grass penalty, reverse | `scripts/car.gd` |
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
@@ -50,8 +50,8 @@ Even quicker: plug the phone in with USB debugging enabled and press the
 
 - **Car:** drop a `car.glb` (or .gltf/.fbx/.obj) into `assets/cars/` and it's auto-fitted
   and team-coloured. `assets/cars/README.md` lists free open-wheel models on itch.io.
-- **More tracks:** the [TUM racetrack-database](https://github.com/TUMFTM/racetrack-database)
-  has around 25 circuits in the same CSV format. Copy one into `tracks/`, add a
+- **More tracks:** 20 of the [TUM racetrack-database](https://github.com/TUMFTM/racetrack-database)
+  circuits are included; the rest use the same CSV format. Copy one into `tracks/`, add a
   `<name>.csv.import` file with the same contents as the existing ones (it stops
   Godot from treating the CSV as a translation table), then add an entry to `TRACKS`
   in `scripts/game_state.gd`. Monaco isn't in that database.

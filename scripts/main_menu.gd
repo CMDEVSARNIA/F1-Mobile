@@ -5,6 +5,8 @@ var _track_buttons: Array[Button] = []
 var _laps_btn: Button
 var _opp_btn: Button
 var _controls_btn: Button
+var _track_list: VBoxContainer
+var _scroll: ScrollContainer
 var _info: Label
 
 
@@ -38,8 +40,20 @@ func _ready() -> void:
 	var title := _label(left, "F1 MOBILE", 56)
 	title.add_theme_color_override("font_color", Color.WHITE)
 	_label(left, "SELECT CIRCUIT", 20).add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	# 20 circuits don't fit: scroll them. The deadzone lets a thumb drag the
+	# list without pressing the button it started on.
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.scroll_deadzone = 14
+	left.add_child(scroll)
+	_track_list = VBoxContainer.new()
+	_track_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_track_list.add_theme_constant_override("separation", 10)
+	scroll.add_child(_track_list)
+	_scroll = scroll
 	for i in GameState.TRACKS.size():
-		var b := _button(left, "", _select_track.bind(i))
+		var b := _button(_track_list, "", _select_track.bind(i))
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.toggle_mode = true
 		_track_buttons.append(b)
@@ -69,6 +83,9 @@ func _ready() -> void:
 	GameState.style_primary(start)
 
 	_refresh()
+	# Bring the selected circuit into view once layout has run.
+	await get_tree().process_frame
+	_scroll.ensure_control_visible(_track_buttons[clampi(GameState.settings.track, 0, _track_buttons.size() - 1)])
 
 
 func _label(parent: Control, text: String, size: int) -> Label:
@@ -93,7 +110,7 @@ func _button(parent: Control, text: String, cb: Callable) -> Button:
 func _refresh_track_label(i: int) -> void:
 	var t: Dictionary = GameState.TRACKS[i]
 	var best := GameState.format_time(GameState.best_laps.get(t.id, 0.0))
-	_track_buttons[i].text = "  %s  -  %s        best %s" % [t.name, t.country, best]
+	_track_buttons[i].text = "  %s  ·  %s      %s" % [t.name, t.country, best]
 
 
 func _refresh() -> void:

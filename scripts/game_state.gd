@@ -4,11 +4,28 @@ extends Node
 const SETTINGS_PATH := "user://settings.cfg"
 
 ## Centerlines come from the TUM racetrack-database (LGPL-3.0), see tracks/.
+## Listed in calendar order; the last four are classic venues.
 const TRACKS := [
-	{"id": "monza", "name": "Monza", "country": "Italy", "file": "res://tracks/monza.csv"},
+	{"id": "melbourne", "name": "Albert Park", "country": "Australia", "file": "res://tracks/melbourne.csv"},
+	{"id": "shanghai", "name": "Shanghai", "country": "China", "file": "res://tracks/shanghai.csv"},
+	{"id": "suzuka", "name": "Suzuka", "country": "Japan", "file": "res://tracks/suzuka.csv"},
+	{"id": "sakhir", "name": "Sakhir", "country": "Bahrain", "file": "res://tracks/sakhir.csv"},
+	{"id": "catalunya", "name": "Barcelona-Catalunya", "country": "Spain", "file": "res://tracks/catalunya.csv"},
+	{"id": "montreal", "name": "Gilles Villeneuve", "country": "Canada", "file": "res://tracks/montreal.csv"},
+	{"id": "spielberg", "name": "Red Bull Ring", "country": "Austria", "file": "res://tracks/spielberg.csv"},
 	{"id": "silverstone", "name": "Silverstone", "country": "Great Britain", "file": "res://tracks/silverstone.csv"},
 	{"id": "spa", "name": "Spa-Francorchamps", "country": "Belgium", "file": "res://tracks/spa.csv"},
-	{"id": "suzuka", "name": "Suzuka", "country": "Japan", "file": "res://tracks/suzuka.csv"},
+	{"id": "budapest", "name": "Hungaroring", "country": "Hungary", "file": "res://tracks/budapest.csv"},
+	{"id": "zandvoort", "name": "Zandvoort", "country": "Netherlands", "file": "res://tracks/zandvoort.csv"},
+	{"id": "monza", "name": "Monza", "country": "Italy", "file": "res://tracks/monza.csv"},
+	{"id": "austin", "name": "Circuit of the Americas", "country": "USA", "file": "res://tracks/austin.csv"},
+	{"id": "mexicocity", "name": "Hermanos Rodriguez", "country": "Mexico", "file": "res://tracks/mexicocity.csv"},
+	{"id": "saopaulo", "name": "Interlagos", "country": "Brazil", "file": "res://tracks/saopaulo.csv"},
+	{"id": "yasmarina", "name": "Yas Marina", "country": "Abu Dhabi", "file": "res://tracks/yasmarina.csv"},
+	{"id": "sepang", "name": "Sepang", "country": "Malaysia (classic)", "file": "res://tracks/sepang.csv"},
+	{"id": "hockenheim", "name": "Hockenheim", "country": "Germany (classic)", "file": "res://tracks/hockenheim.csv"},
+	{"id": "nuerburgring", "name": "Nurburgring GP", "country": "Germany (classic)", "file": "res://tracks/nuerburgring.csv"},
+	{"id": "sochi", "name": "Sochi", "country": "Russia (classic)", "file": "res://tracks/sochi.csv"},
 ]
 
 const LAP_OPTIONS := [1, 3, 5, 10]
