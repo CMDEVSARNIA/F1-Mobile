@@ -67,7 +67,7 @@ signal impact(strength: float)
 var model: Node3D
 
 
-func setup(p_track: Track, color: Color, slot: int) -> void:
+func setup(p_track: Track, color: Color, slot: int, accent := Color.WHITE) -> void:
 	track = p_track
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	wall_min_slide_angle = 0.0
@@ -79,6 +79,7 @@ func setup(p_track: Track, color: Color, slot: int) -> void:
 	add_child(shape)
 	model = CarModel.new()
 	model.team_color = color
+	model.accent_color = accent
 	add_child(model)
 	place_on_grid(slot)
 

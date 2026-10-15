@@ -1,5 +1,5 @@
 # Converted from a MagicaVoxel export by tools/split_voxel_obj.py
-mtllib car.mtl
+mtllib voxel_car.mtl
 o car
 v 0.7 0 0.1
 v 0.7 0 0.6

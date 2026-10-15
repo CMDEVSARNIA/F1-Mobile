@@ -33,16 +33,16 @@ const OPPONENT_OPTIONS := [0, 3, 5, 9]
 
 ## Fictional grid. Colors are loosely "team-like" without any branding.
 const DRIVERS := [
-	{"name": "YOU", "color": Color(0.9, 0.05, 0.05)},
-	{"name": "VERSANO", "color": Color(0.05, 0.1, 0.45)},
-	{"name": "HALLORAN", "color": Color(0.0, 0.62, 0.6)},
-	{"name": "OKAFOR", "color": Color(1.0, 0.5, 0.0)},
-	{"name": "LINDQVIST", "color": Color(0.0, 0.35, 0.2)},
-	{"name": "MORAES", "color": Color(0.95, 0.95, 0.95)},
-	{"name": "TAKEDA", "color": Color(0.15, 0.35, 0.95)},
-	{"name": "DUBOIS", "color": Color(0.95, 0.4, 0.7)},
-	{"name": "KOWALSKI", "color": Color(0.35, 0.35, 0.38)},
-	{"name": "ARMSTRONG", "color": Color(0.55, 0.85, 0.1)},
+	{"name": "YOU", "color": Color(0.9, 0.05, 0.05), "accent": Color(1, 1, 1)},
+	{"name": "VERSANO", "color": Color(0.05, 0.1, 0.45), "accent": Color(0.9, 0.1, 0.15)},
+	{"name": "HALLORAN", "color": Color(0.0, 0.62, 0.6), "accent": Color(0.08, 0.08, 0.09)},
+	{"name": "OKAFOR", "color": Color(1.0, 0.5, 0.0), "accent": Color(0.25, 0.65, 1.0)},
+	{"name": "LINDQVIST", "color": Color(0.0, 0.35, 0.2), "accent": Color(0.8, 1.0, 0.3)},
+	{"name": "MORAES", "color": Color(0.95, 0.95, 0.95), "accent": Color(0.85, 0.1, 0.1)},
+	{"name": "TAKEDA", "color": Color(0.15, 0.35, 0.95), "accent": Color(1, 1, 1)},
+	{"name": "DUBOIS", "color": Color(0.95, 0.4, 0.7), "accent": Color(0.2, 0.4, 0.95)},
+	{"name": "KOWALSKI", "color": Color(0.35, 0.35, 0.38), "accent": Color(0.9, 0.15, 0.1)},
+	{"name": "ARMSTRONG", "color": Color(0.55, 0.85, 0.1), "accent": Color(0.06, 0.06, 0.07)},
 ]
 
 var settings := {

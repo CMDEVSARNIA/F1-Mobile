@@ -109,7 +109,7 @@ func _spawn_cars(opponents: int) -> void:
 		add_child(car)
 		var is_player := slot == player_slot
 		var d: Dictionary = GameState.DRIVERS[0] if is_player else GameState.DRIVERS[ai_i]
-		car.setup(track, d.color, slot)
+		car.setup(track, d.color, slot, d.get("accent", Color.WHITE))
 		car.driver_name = d.name
 		car.is_player = is_player
 		car.lap_completed.connect(_on_lap_completed)

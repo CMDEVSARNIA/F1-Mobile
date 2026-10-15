@@ -13,7 +13,7 @@ code and data, so the project runs with no third-party art.
 | Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
 | Arcade car physics: bicycle-model steering, downforce grip that grows with speed (~2g slow, ~5g fast), ~335 km/h top speed, grass penalty, reverse | `scripts/car.gd` |
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
-| Low-poly F1-style car (halo, wings, sidepods, spinning and steering wheels) in team colours | `scripts/car_model.gd` |
+| Clean low-poly modern F1 car modelled in code: lofted nose and sidepods, halo, multi-element wings, DRS flap, compound-coloured tyres, two-tone team liveries | `scripts/lowpoly_car.gd`, `scripts/car_model.gd` |
 | Race flow: 5 red lights, random hold, lights out, laps, positions, wrong-way warning, results, personal bests saved per track | `scripts/race.gd` |
 | Mobile controls modelled on GRID Autosport / Real Racing: arrow buttons, drag-to-steer wheel or tilt; pedal-shaped brake/gas; auto-throttle by default (manual "Pro" option); braking assist; haptic taps | `scripts/touch_controls.gd` |
 | Controls & assists screen (main menu and pause): steering style, sensitivity, tilt direction + auto/manual tilt calibration, steering assist with edge protection, braking assist levels, auto/manual throttle, button size and opacity, mirrored layout, vibration | `scripts/ui/controls_panel.gd`, `scripts/car.gd` |

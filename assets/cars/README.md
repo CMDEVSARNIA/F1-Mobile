@@ -1,12 +1,13 @@
 # Custom car model
 
-**Currently installed:** `car.obj` / `car.mtl` is the
-[F1 Style Race Car Voxel](https://join217.itch.io/open-wheel-race-car) by join217
-(listed as free for commercial and non-commercial use). It was converted with
-`tools/split_voxel_obj.py` so it needs no palette texture: each MagicaVoxel colour
-slot became a named material (`body` gets team colours, plus `carbon`, `carbon_tyre`,
-`rim`, `helmet`, `rain_light`, `plank`) and it was rotated to face -Z. Delete both
-files to go back to the built-in car.
+**Default car:** the built-in low-poly F1 car in `scripts/lowpoly_car.gd`, modelled in
+code (lofted cross-sections, flat-shaded, ~1.5k triangles) with team liveries, a working
+DRS flap and compound-coloured tyre stripes.
+
+**Voxel car:** `voxel/voxel_car.obj` is the
+[F1 Style Race Car Voxel](https://join217.itch.io/open-wheel-race-car) by join217, converted
+with `tools/split_voxel_obj.py`. To use it, copy both files here as `car.obj` / `car.mtl`
+and change the `mtllib` line to `car.mtl`. Custom models don't get DRS or tyre stripes.
 
 Save a model here as **`car.glb`** (also accepted: `car.gltf`, `car.fbx`, `car.obj`)
 and every car on the grid uses it instead of the built-in low-poly car.
