@@ -70,6 +70,34 @@ var drs_open := false
 var tow := 0.0  # 0..1
 var _drs_zone := -1
 
+# Tyres. A compound's `life` is the share of the race distance it lasts
+# before falling off the cliff, so strategy works the same for 3 or 10 laps.
+const COMPOUNDS := [
+	{"name": "SOFT", "short": "S", "color": Color(0.95, 0.12, 0.1), "grip": 1.05, "life": 0.55},
+	{"name": "MEDIUM", "short": "M", "color": Color(1.0, 0.82, 0.1), "grip": 1.0, "life": 0.8},
+	{"name": "HARD", "short": "H", "color": Color(0.95, 0.95, 0.95), "grip": 0.955, "life": 1.15},
+]
+var compound := 1
+var wear := 0.0
+var race_laps := 3
+var tyre_wear_enabled := true
+var compounds_used := {}
+var pit_stops := 0
+var team := 0
+## F1 rule: use two different dry compounds in the race (3+ laps here).
+var mandatory_two := false
+var penalty := 0.0  # seconds added at the flag
+
+# Pit stops: request with BOX, the car then drives itself through the lane.
+var pit_requested := false
+var pit_compound := 2
+var in_pit := false
+var pit_limiter := false
+var _pit_state := 0  # 0 driving to box, 1 stopped, 2 done
+var _pit_timer := 0.0
+var _worn_warned := false
+signal pit_event(car, what: String)
+
 signal lap_completed(car, lap_time: float)
 signal crossed_finish(car)
 signal impact(strength: float)
@@ -118,7 +146,9 @@ func _physics_process(dt: float) -> void:
 		throttle = 0.0
 		_update_gear()
 		return
-	if finished and is_player:
+	if in_pit:
+		_pit_drive(dt)
+	elif finished and is_player:
 		_ai_input()  # the car drives itself on the cool-down lap
 	elif is_player:
 		_player_input(dt)
@@ -155,7 +185,7 @@ func _player_input(dt: float) -> void:
 		# Like most mobile racers: the car accelerates by itself, you brake.
 		throttle = 0.0 if brake > 0.05 else 1.0
 	if braking_assist > 0 and speed > 15.0:
-		var limit: float = _target_speed_ahead() * BRAKE_ASSIST_MARGIN[braking_assist]
+		var limit: float = _target_speed_ahead() * BRAKE_ASSIST_MARGIN[braking_assist] * sqrt(tyre_grip())
 		if speed > limit:
 			throttle = 0.0
 			brake = maxf(brake, clampf((speed - limit) / 6.0, 0.3, 1.0))
@@ -193,14 +223,15 @@ func _ai_input() -> void:
 	var line := ai_line
 	# Very simple overtaking/avoidance: pick the other side of a car ahead.
 	for o in others:
-		if o == self:
+		if o == self or o.in_pit:
 			continue
 		var gap: float = o.race_dist - race_dist
 		if gap > 0.0 and gap < 22.0 and absf(o.lateral - lateral) < 2.4:
 			var hw := track.half_width(track_idx, o.lateral) - 1.5
 			line = clampf(o.lateral + (3.2 if o.lateral < 0.0 else -3.2), -hw, hw)
 	steer = _ideal_steer(line)
-	var v_target := _target_speed_ahead() * ai_skill
+	_ai_strategy()
+	var v_target := _target_speed_ahead() * ai_skill * sqrt(tyre_grip())
 	if on_grass:
 		v_target = minf(v_target, 25.0)
 	if speed < v_target - 1.0:
@@ -235,16 +266,24 @@ func _integrate(dt: float) -> void:
 	var right := basis.x
 	var v_long := velocity.dot(fwd)
 	var v_lat := velocity.dot(right)
-	var grip_mul := 0.5 if on_grass else 1.0
+	var tg := tyre_grip()
+	var grip_mul := (0.5 if on_grass else 1.0) * tg
+	if tyre_wear_enabled and controls_enabled:
+		var c: Dictionary = COMPOUNDS[compound]
+		var rate: float = 1.0 / (c.life * race_laps * track.length)
+		wear += absf(velocity.dot(-global_transform.basis.z)) * dt * rate * (1.0 + 1.2 * skid + (0.5 if on_grass else 0.0))
+		if is_player and wear > 0.8 and not _worn_warned:
+			_worn_warned = true
+			pit_event.emit(self, "worn")
 
 	# Longitudinal
 	var accel := 0.0
 	if throttle > 0.01 and v_long > -0.5:
 		var ratio := clampf(v_long / TOP_SPEED, 0.0, 1.0)
-		accel += throttle * MAX_ACCEL * (1.0 - ratio * ratio) * (0.6 if on_grass else 1.0)
+		accel += throttle * MAX_ACCEL * (1.0 - ratio * ratio) * (0.6 if on_grass else 1.0) * minf(tg, 1.0)
 	if brake > 0.01:
 		if v_long > 0.5:
-			accel -= brake * (18.0 + 0.35 * v_long) * (0.5 if on_grass else 1.0)
+			accel -= brake * (18.0 + 0.35 * v_long) * (0.5 if on_grass else 1.0) * tg
 		elif throttle < 0.01 and v_long > -REVERSE_SPEED:
 			accel -= brake * 6.0  # reverse
 		elif v_long < -0.5:
@@ -324,9 +363,10 @@ func _update_track_state() -> void:
 	elif prev_pos < L * 0.25 and lap_pos > L * 0.75 and lap > 0:
 		lap -= 1  # reversed back over the line
 	race_dist = (lap - 1) * L + lap_pos
+	_update_pit(prev_pos)
 	_update_drs(prev_pos)
 	var hw := track.half_width(track_idx, lateral)
-	on_grass = absf(lateral) > hw + Track.KERB_WIDTH * 0.8
+	on_grass = absf(lateral) > hw + Track.KERB_WIDTH * 0.8 and not track.on_pit_surface(lap_pos, lateral)
 	wrong_way = absf(speed) > 5.0 and (-global_transform.basis.z).dot(track.tangents[track_idx]) < -0.3
 	if absf(lateral) > hw + Track.KERB_WIDTH + Track.RUNOFF + 25.0:
 		reset_to_track()
@@ -353,6 +393,10 @@ func gap_ahead_seconds() -> float:
 
 
 func _update_drs(prev_pos: float) -> void:
+	if in_pit:
+		drs_open = false
+		drs_armed = false
+		return
 	for z: Dictionary in track.drs_zones:
 		if Track.crossed(prev_pos, lap_pos, z.detect):
 			drs_armed = lap >= drs_from_lap and (drs_from_lap == 0 or gap_ahead_seconds() < 1.0)
@@ -368,6 +412,111 @@ func _update_drs(prev_pos: float) -> void:
 		drs_open = true
 	if model:
 		model.set_drs(drs_open)
+
+
+# ------------------------------------------------------------ tyres & pits
+
+func tyre_grip() -> float:
+	var c: Dictionary = COMPOUNDS[compound]
+	var g: float = c.grip * (1.0 - 0.06 * minf(wear, 1.0))
+	if wear > 0.8:
+		g -= 0.28 * clampf((wear - 0.8) / 0.25, 0.0, 1.2)  # the cliff
+	return g
+
+
+func set_compound(c: int) -> void:
+	compound = c
+	wear = 0.0
+	_worn_warned = false
+	compounds_used[c] = true
+	if model:
+		model.set_compound(COMPOUNDS[c].color)
+
+
+func request_pit(c: int) -> void:
+	pit_requested = true
+	pit_compound = c
+
+
+func cancel_pit() -> void:
+	if not in_pit:
+		pit_requested = false
+
+
+func _update_pit(prev_pos: float) -> void:
+	if not in_pit and pit_requested and controls_enabled and not finished \
+			and Track.crossed(prev_pos, lap_pos, track.pit_in):
+		in_pit = true
+		_pit_state = 0
+		pit_event.emit(self, "enter")
+	if in_pit:
+		var d := track.pit_progress(lap_pos)
+		pit_limiter = track.in_pit_limiter(d)
+		if d > track.pit_len - 4.0 or d < -60.0:
+			in_pit = false
+			pit_limiter = false
+			pit_requested = false
+			pit_event.emit(self, "exit")
+
+
+func _pit_drive(dt: float) -> void:
+	var d := track.pit_progress(lap_pos)
+	var look := clampf(absf(speed) * 0.4, 6.0, 20.0)
+	var aim := track.point_at(lap_pos + look, track.pit_lateral(d + look))
+	var local := global_transform.affine_inverse() * aim
+	steer = clampf(atan2(local.x, -local.z) * 3.0, -1.0, 1.0)
+	# Brake down to the limiter before it starts, then hold it.
+	var limiter_start := track.pit_ramp * 0.6
+	var v_target := sqrt(Track.PIT_SPEED * Track.PIT_SPEED + 2.0 * 14.0 * maxf(limiter_start - d, 0.0))
+	if track.in_pit_limiter(d):
+		v_target = Track.PIT_SPEED
+	if _pit_state < 2:
+		var to_box := track.pit_box(team) - d
+		v_target = minf(v_target, sqrt(2.0 * 5.0 * maxf(to_box, 0.0)) + 0.3)
+		if _pit_state == 0 and (to_box < 0.6 or (to_box < 3.0 and absf(speed) < 1.0)):
+			_pit_state = 1
+			_pit_timer = 2.3 + randf_range(0.0, 0.7)
+			pit_event.emit(self, "stop")
+		if _pit_state == 1:
+			velocity = Vector3.ZERO
+			throttle = 0.0
+			brake = 1.0
+			_pit_timer -= dt
+			if _pit_timer <= 0.0:
+				set_compound(pit_compound)
+				pit_stops += 1
+				_pit_state = 2
+				pit_event.emit(self, "done")
+			return
+	if speed < v_target - 0.5:
+		throttle = 1.0 if v_target - speed > 3.0 else 0.4
+		brake = 0.0
+	elif speed > v_target + 0.5:
+		throttle = 0.0
+		brake = clampf((speed - v_target) / 6.0, 0.2, 1.0)
+	else:
+		throttle = 0.25
+		brake = 0.0
+
+
+## AI: pit when the tyres won't make the flag, onto the softest compound
+## that will.
+func _ai_strategy() -> void:
+	if pit_requested or in_pit or not tyre_wear_enabled or finished:
+		return
+	var remaining := race_laps - (lap - 1) - lap_pos / track.length
+	if remaining < 0.35:
+		return
+	var life_left: float = (1.0 - wear) * COMPOUNDS[compound].life * race_laps
+	var owes_compound := mandatory_two and compounds_used.size() < 2 and remaining < race_laps * 0.55
+	if not owes_compound and (life_left > remaining or wear < 0.7):
+		return
+	var choice := 2
+	for c in [0, 1, 2]:
+		if c != compound and COMPOUNDS[c].life * race_laps >= remaining * 1.05:
+			choice = c
+			break
+	request_pit(choice)
 
 
 func _compute_tow() -> float:
@@ -401,6 +550,10 @@ func _on_cross_line() -> void:
 
 func reset_to_track() -> void:
 	_stuck_time = 0.0
+	if in_pit:
+		in_pit = false
+		pit_limiter = false
+		pit_requested = false
 	var s := lap_pos - 15.0
 	global_transform = track.transform_at(s, 0.0)
 	velocity = Vector3.ZERO

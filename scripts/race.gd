@@ -51,6 +51,8 @@ func _ready() -> void:
 	hud.touch.visible = DisplayServer.is_touchscreen_available() or OS.has_feature("mobile")
 	_apply_controls()
 	hud.controls_pressed.connect(_open_controls)
+	hud.box_selected.connect(_on_box)
+	hud.pits_enabled = laps >= 2
 	hud.minimap.setup(track, cars, player)
 	hud.pause_pressed.connect(_toggle_pause)
 	hud.resume_pressed.connect(_toggle_pause)
@@ -114,9 +116,18 @@ func _spawn_cars(opponents: int) -> void:
 		car.is_player = is_player
 		car.lap_completed.connect(_on_lap_completed)
 		car.crossed_finish.connect(_on_crossed_finish)
+		car.team = 0 if is_player else ai_i
+		car.race_laps = laps
+		car.tyre_wear_enabled = laps >= 2
+		car.mandatory_two = laps >= 3
 		if is_player:
 			player = car
+			car.set_compound(GameState.settings.start_compound)
+			car.pit_event.connect(_on_pit_event)
 		else:
+			# Strategy mix like a real grid: mostly mediums, some softs/hards.
+			var roll := rng.randf()
+			car.set_compound(0 if roll < 0.3 else (1 if roll < 0.8 else 2))
 			# Front of the grid is a touch quicker, like a real grid.
 			car.ai_skill = clampf(0.97 - slot * 0.006 + rng.randf_range(-0.01, 0.01), 0.88, 0.99)
 			car.ai_line = rng.randf_range(-1.5, 1.5)
@@ -235,6 +246,7 @@ func _to_menu() -> void:
 
 func _standings() -> Array:
 	var order := _finish_order.duplicate()
+	order.sort_custom(func(a, b): return a.finish_time + a.penalty < b.finish_time + b.penalty)
 	var running := cars.filter(func(c): return not c.finished)
 	running.sort_custom(func(a, b): return a.race_dist > b.race_dist)
 	order.append_array(running)
@@ -247,6 +259,29 @@ func _update_hud() -> void:
 	hud.update_telemetry(player, order.find(player) + 1, cars.size(), laps, now, state != State.COUNTDOWN)
 	if player.wrong_way and state == State.RACING:
 		hud.show_message("WRONG WAY", 0.3)
+
+
+func _on_pit_event(car: Car, what: String) -> void:
+	var c: Dictionary = Car.COMPOUNDS[car.pit_compound]
+	match what:
+		"worn":
+			hud.show_message("TYRES ARE GONE - BOX!", 2.5)
+		"enter":
+			hud.show_message("PIT LANE - LIMITER ON", 2.0)
+		"stop":
+			hud.show_message("FITTING %s" % c.name, 2.5)
+		"done":
+			hud.show_message("GO GO GO!  %s ON" % c.name, 1.5)
+
+
+## From the HUD's BOX button: -1 cancels, otherwise the compound to fit.
+func _on_box(compound: int) -> void:
+	if compound < 0:
+		player.cancel_pit()
+		hud.show_message("BOX CANCELLED", 1.2)
+	else:
+		player.request_pit(compound)
+		hud.show_message("BOX THIS LAP - %s" % Car.COMPOUNDS[compound].name, 2.0)
 
 
 func _on_lap_completed(car: Car, lap_time: float) -> void:
@@ -264,10 +299,14 @@ func _on_crossed_finish(car: Car) -> void:
 		return
 	car.finished = true
 	car.finish_time = car.clock
+	if car.mandatory_two and car.compounds_used.size() < 2:
+		car.penalty = 10.0
+		if car == player:
+			hud.show_message("+10s PENALTY - ONE TYRE COMPOUND", 3.0)
 	_finish_order.append(car)
 	if car == player:
 		state = State.FINISHED
-		var pos := _finish_order.size()
+		var pos := _standings().find(player) + 1
 		hud.show_message("CHEQUERED FLAG  -  P%d" % pos, 4.0)
 		_results_timer = 4.0
 
@@ -276,7 +315,7 @@ func _show_results() -> void:
 	var rows := []
 	var order := _standings()
 	var leader: Car = order[0]
-	var leader_time := leader.finish_time
+	var leader_time := leader.finish_time + leader.penalty
 	var now := player.clock
 	for i in order.size():
 		var c: Car = order[i]
@@ -284,7 +323,7 @@ func _show_results() -> void:
 		if i == 0:
 			t = GameState.format_time(leader_time - _race_start)
 		elif c.finished:
-			t = "+%.3f" % (c.finish_time - leader_time)
+			t = "+%.3f" % (c.finish_time + c.penalty - leader_time)
 		elif c.lap < laps:
 			var down := laps - c.lap
 			t = "+%d LAP%s" % [down, "S" if down > 1 else ""]
@@ -293,6 +332,8 @@ func _show_results() -> void:
 			var avg := maxf(c.race_dist / maxf(now - _race_start, 1.0), 20.0)
 			var remaining := laps * track.length - c.race_dist
 			t = "+%.1f" % (now - leader_time + remaining / avg)
-		rows.append({"pos": i + 1, "name": c.driver_name, "time": t,
+		if c.penalty > 0.0:
+			t += "  (+%ds pen)" % int(c.penalty)
+		rows.append({"pos": i + 1, "name": c.driver_name, "time": t, "stops": c.pit_stops,
 				"best": GameState.format_time(c.best_lap), "is_player": c == player})
 	hud.show_results(rows)

@@ -6,6 +6,9 @@ const Minimap = preload("res://scripts/minimap.gd")
 const TouchControls = preload("res://scripts/touch_controls.gd")
 const Dashboard = preload("res://scripts/ui/dashboard.gd")
 const IconButton = preload("res://scripts/ui/icon_button.gd")
+const TyreGauge = preload("res://scripts/ui/tyre_gauge.gd")
+const COMPOUND_NAMES := ["SOFT", "MEDIUM", "HARD"]
+const COMPOUND_COLORS := [Color(0.95, 0.12, 0.1), Color(1.0, 0.82, 0.1), Color(0.95, 0.95, 0.95)]
 
 signal pause_pressed
 signal camera_pressed
@@ -14,6 +17,7 @@ signal resume_pressed
 signal restart_pressed
 signal menu_pressed
 signal controls_pressed
+signal box_selected(compound: int)  # -1 = cancel
 
 var root: Control
 var pos_label: Label
@@ -22,6 +26,11 @@ var time_label: Label
 var last_label: Label
 var best_label: Label
 var dashboard: Control
+var tyre_gauge: Control
+var box_button: Button
+var box_picker: HBoxContainer
+var pits_enabled := true
+var _box_requested := false
 var message_label: Label
 var lights: Array[Panel] = []
 var lights_box: HBoxContainer
@@ -114,6 +123,47 @@ func _ready() -> void:
 	root.add_child(minimap)
 	_place(minimap, Control.PRESET_TOP_RIGHT, -200, 130, -20, 310)
 
+	# Tyres: gauge beside the driver display
+	tyre_gauge = TyreGauge.new()
+	root.add_child(tyre_gauge)
+	_place(tyre_gauge, Control.PRESET_CENTER_BOTTOM, -215, -100, -133, -18)
+
+	# Pit call: BOX button under the map, compound picker under that
+	box_button = Button.new()
+	box_button.text = "BOX"
+	box_button.focus_mode = Control.FOCUS_NONE
+	box_button.add_theme_font_size_override("font_size", 22)
+	box_button.pressed.connect(_on_box_pressed)
+	root.add_child(box_button)
+	_place(box_button, Control.PRESET_TOP_RIGHT, -390, 130, -215, 182)
+	box_picker = HBoxContainer.new()
+	box_picker.add_theme_constant_override("separation", 6)
+	root.add_child(box_picker)
+	_place(box_picker, Control.PRESET_TOP_RIGHT, -390, 190, -215, 250)
+	for i in 3:
+		var b := Button.new()
+		b.text = COMPOUND_NAMES[i].left(1)
+		b.tooltip_text = COMPOUND_NAMES[i]
+		b.focus_mode = Control.FOCUS_NONE
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.add_theme_font_size_override("font_size", 26)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.06, 0.06, 0.08, 0.92)
+		sb.border_color = COMPOUND_COLORS[i]
+		sb.set_border_width_all(4)
+		sb.set_corner_radius_all(26)
+		b.add_theme_stylebox_override("normal", sb)
+		b.add_theme_stylebox_override("hover", sb)
+		b.add_theme_stylebox_override("pressed", sb)
+		b.add_theme_color_override("font_color", COMPOUND_COLORS[i])
+		b.add_theme_color_override("font_hover_color", COMPOUND_COLORS[i])
+		b.add_theme_color_override("font_pressed_color", COMPOUND_COLORS[i])
+		b.pressed.connect(func():
+			box_picker.visible = false
+			box_selected.emit(i))
+		box_picker.add_child(b)
+	box_picker.visible = false
+
 	_build_pause()
 	_build_results()
 
@@ -146,6 +196,17 @@ func update_telemetry(car, position: int, total: int, laps: int, now: float, rac
 	dashboard.throttle = car.throttle
 	dashboard.brake = car.brake
 	dashboard.drs_state = car.drs_state()
+	var comp: Dictionary = car.COMPOUNDS[car.compound]
+	tyre_gauge.compound_short = comp.short
+	tyre_gauge.compound_color = comp.color
+	tyre_gauge.life = 1.0 - car.wear
+	tyre_gauge.enabled = car.tyre_wear_enabled
+	box_button.visible = pits_enabled and racing and not car.finished
+	_box_requested = car.pit_requested
+	box_button.disabled = car.in_pit
+	box_button.text = "PIT LANE" if car.in_pit else ("BOX: %s  ✕" % COMPOUND_NAMES[car.pit_compound] if car.pit_requested else "BOX")
+	if car.pit_limiter:
+		show_message("PIT LIMITER  80", 0.2)
 	dashboard.tow = car.tow
 	touch.drs_state = car.drs_state()
 
@@ -176,11 +237,21 @@ func show_results(rows: Array) -> void:
 			b.add_theme_color_override("font_color", Color(1, 0.85, 0.1))
 		var c := _label(line, r.time, 24)
 		c.custom_minimum_size = Vector2(150, 0)
+		var st := _label(line, "%d stop%s" % [r.stops, "" if r.stops == 1 else "s"], 20)
+		st.custom_minimum_size = Vector2(80, 0)
 		_label(line, "best " + r.best, 20)
 		results_list.add_child(line)
 	results_panel.visible = true
 	touch.visible = false
 	touch.release_all()
+
+
+func _on_box_pressed() -> void:
+	if _box_requested:
+		box_selected.emit(-1)
+		box_picker.visible = false
+	else:
+		box_picker.visible = not box_picker.visible
 
 
 # ------------------------------------------------------------ helpers

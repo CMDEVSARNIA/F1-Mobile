@@ -30,6 +30,19 @@ var bounds := Rect2()
 ## [{detect, start, end}] in metres along the lap, on the longest straights.
 var drs_zones: Array = []
 
+# Pit lane: runs beside the start/finish straight on `pit_side` (+1 right).
+const PIT_IN_MAX := 420.0  # furthest before the line the lane may leave the track
+const PIT_OUT_MAX := 300.0  # furthest after the line it may rejoin
+const PIT_LANE_WIDTH := 8.0
+const PIT_SPEED := 22.0  # 80 km/h limiter
+const PIT_RAMP := 110.0  # entry/exit blend length (shrinks on short straights)
+var pit_ramp := PIT_RAMP
+var pit_box_spacing := 24.0
+var pit_side := 1.0
+var pit_offset := 20.0  # lane centre distance from the centreline (full section)
+var pit_in := 0.0
+var pit_len := 0.0
+
 var _grid := {}
 
 
@@ -40,7 +53,9 @@ func build(csv_path: String) -> bool:
 	_compute_speed_profile()
 	_compute_drs_zones()
 	_build_grid()
+	_compute_pit()
 	_build_meshes()
+	_build_pit()
 	_build_drs_markers()
 	_build_scenery()
 	return true
@@ -226,6 +241,206 @@ static func crossed(a: float, b: float, p: float) -> bool:
 	if b >= a:
 		return a < p and p <= b
 	return p > a or p <= b
+
+
+# ---------------------------------------------------------------- pit lane
+
+func _compute_pit() -> void:
+	# Fit the lane to the straight around the line: walk out from the line
+	# while the track stays (nearly) straight.
+	var back := 0.0
+	while back < PIT_IN_MAX and absf(curvature[index_at_distance(-back - 10.0)]) < 1.0 / 320.0:
+		back += 10.0
+	var fwd := 0.0
+	while fwd < PIT_OUT_MAX and absf(curvature[index_at_distance(fwd + 10.0)]) < 1.0 / 320.0:
+		fwd += 10.0
+	back = maxf(back - 20.0, 200.0)
+	fwd = maxf(fwd - 20.0, 150.0)
+	pit_in = fposmod(-back, length)
+	pit_len = back + fwd
+	pit_ramp = clampf(pit_len * 0.18, 70.0, PIT_RAMP)
+	var drivers: Array = Engine.get_main_loop().root.get_node("/root/GameState").DRIVERS
+	pit_box_spacing = clampf((pit_len - 2.0 * pit_ramp - 60.0) / drivers.size(), 14.0, 24.0)
+	# Lane goes on whichever side of the straight has room, clear of the rest
+	# of the circuit. Offset clears the widest point of the straight.
+	var max_w := {1.0: 0.0, -1.0: 0.0}
+	for k in 30:
+		var i := index_at_distance(pit_in + pit_len * k / 29.0)
+		max_w[1.0] = maxf(max_w[1.0], width_right[i])
+		max_w[-1.0] = maxf(max_w[-1.0], width_left[i])
+	var best_side := 1.0
+	var best_clash := INF
+	for side: float in [1.0, -1.0]:
+		var clash := 0
+		for k in 30:
+			var s := pit_in + pit_len * k / 29.0
+			var i := index_at_distance(s)
+			# Far enough out that only *other* parts of the circuit can be near.
+			var probe: Vector3 = points[i] + rights[i] * side * (max_w[side] + 34.0)
+			if is_near_track(probe, 6.0):
+				clash += 1
+		if clash < best_clash:
+			best_clash = clash
+			best_side = side
+	pit_side = best_side
+	pit_offset = max_w[pit_side] + KERB_WIDTH + 12.0
+
+
+## Distance travelled into the pit lane for lap position `s` (may be < 0 or
+## > pit_len when outside it).
+func pit_progress(s: float) -> float:
+	var d := fposmod(s - pit_in, length)
+	return d - length if d > length * 0.5 else d
+
+
+## Signed lateral offset of the pit lane centre at pit progress `d`.
+func pit_lateral(d: float) -> float:
+	var i := index_at_distance(pit_in + d)
+	var edge := (width_right[i] if pit_side > 0 else width_left[i]) - 1.5
+	var t := 1.0
+	if d < pit_ramp:
+		t = smoothstep(0.0, pit_ramp, d)
+	elif d > pit_len - pit_ramp:
+		t = 1.0 - smoothstep(pit_len - pit_ramp, pit_len, d)
+	return lerpf(edge, pit_offset, t) * pit_side
+
+
+func pit_box(team: int) -> float:
+	return pit_ramp + 40.0 + team * pit_box_spacing
+
+
+func in_pit_limiter(d: float) -> bool:
+	return d > pit_ramp * 0.6 and d < pit_len - pit_ramp * 0.6
+
+
+func on_pit_surface(s: float, lateral: float) -> bool:
+	var d := pit_progress(s)
+	if d < 0.0 or d > pit_len or signf(lateral) != pit_side:
+		return false
+	return absf(lateral - pit_lateral(d)) < PIT_LANE_WIDTH * 0.75
+
+
+func _in_pit_complex(p: Vector3) -> bool:
+	var i := closest_index_global(p)
+	var proj := project(p, i)
+	var d := pit_progress(proj.x)
+	return d > -60.0 and d < pit_len + 60.0 and signf(proj.y) == pit_side \
+			and absf(proj.y) < pit_offset + 45.0
+
+
+func _build_pit() -> void:
+	var asphalt := StandardMaterial3D.new()
+	asphalt.albedo_color = Color(0.3, 0.3, 0.32)
+	asphalt.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var vc := StandardMaterial3D.new()
+	vc.vertex_color_use_as_albedo = true
+	vc.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var steps := int(pit_len / 4.0)
+	var lane_l := PackedVector3Array()
+	var lane_r := PackedVector3Array()
+	var line_l := PackedVector3Array()
+	var line_r := PackedVector3Array()
+	for k in steps + 1:
+		var d := pit_len * k / steps
+		var p := point_at(pit_in + d, pit_lateral(d))
+		var i := index_at_distance(pit_in + d)
+		var r := rights[i] * pit_side
+		var y := Vector3(0, _road_y(i) + 0.004, 0)
+		lane_l.append(p - r * PIT_LANE_WIDTH / 2.0 + y)
+		lane_r.append(p + r * PIT_LANE_WIDTH / 2.0 + y)
+		# Painted line on the garage side marks the fast lane
+		line_l.append(p + r * 0.8 + y + Vector3(0, 0.006, 0))
+		line_r.append(p + r * 1.0 + y + Vector3(0, 0.006, 0))
+	_add_mesh(_open_ribbon(lane_l, lane_r, Color.WHITE), asphalt)
+	_add_mesh(_open_ribbon(line_l, line_r, Color(0.95, 0.95, 0.95)), vc)
+
+	# Pit wall between track and lane, and the garage block behind the lane.
+	var faces := PackedVector3Array()
+	var wall := SurfaceTool.new()
+	wall.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var wall_off := (pit_offset - PIT_LANE_WIDTH / 2.0 - 1.0)
+	var garage_off := pit_offset + PIT_LANE_WIDTH / 2.0 + 0.5
+	for spec in [[wall_off, pit_ramp - 10.0, pit_len - pit_ramp + 10.0, 1.1, Color(0.85, 0.85, 0.88)],
+			[garage_off, pit_ramp, pit_len - pit_ramp, 1.2, Color(0.5, 0.5, 0.55)]]:
+		var segs := int((spec[2] - spec[1]) / 6.0)
+		for k in segs:
+			var d0: float = spec[1] + (spec[2] - spec[1]) * k / segs
+			var d1: float = spec[1] + (spec[2] - spec[1]) * (k + 1) / segs
+			var a := point_at(pit_in + d0, spec[0] * pit_side)
+			var b := point_at(pit_in + d1, spec[0] * pit_side)
+			var up := Vector3(0, spec[3], 0)
+			wall.set_color(spec[4] if k % 2 == 0 else Color(0.85, 0.1, 0.1))
+			for v in [a, b, b + up, a, b + up, a + up]:
+				wall.add_vertex(v)
+			faces.append_array([a, b, b + up, a, b + up, a + up])
+	wall.generate_normals()
+	_add_mesh(wall.commit(), vc)
+	var body := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var concave := ConcavePolygonShape3D.new()
+	concave.backface_collision = true
+	concave.set_faces(faces)
+	shape.shape = concave
+	body.add_child(shape)
+	add_child(body)
+
+	# Garages: one per team, coloured door frames, under a long roof.
+	var shell := StandardMaterial3D.new()
+	shell.albedo_color = Color(0.86, 0.86, 0.9)
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.08, 0.08, 0.1)
+	var drivers: Array = Engine.get_main_loop().root.get_node("/root/GameState").DRIVERS
+	for team in drivers.size():
+		var d := pit_box(team)
+		if d > pit_len - pit_ramp:
+			break
+		var i := index_at_distance(pit_in + d)
+		var basis := Basis.looking_at(tangents[i], Vector3.UP)
+		var front := point_at(pit_in + d, (garage_off + 0.6) * pit_side)
+		var out := rights[i] * pit_side
+		var g := MeshInstance3D.new()
+		var gb := BoxMesh.new()
+		gb.size = Vector3(14.0, 7.0, pit_box_spacing - 1.0)
+		g.mesh = gb
+		g.material_override = shell
+		g.transform = Transform3D(basis, front + out * 7.0 + Vector3(0, 3.5, 0))
+		add_child(g)
+		var door := MeshInstance3D.new()
+		var db := BoxMesh.new()
+		db.size = Vector3(0.2, 4.5, pit_box_spacing - 6.0)
+		door.mesh = db
+		door.material_override = dark
+		door.transform = Transform3D(basis, front + out * 0.05 + Vector3(0, 2.25, 0))
+		add_child(door)
+		var band := MeshInstance3D.new()
+		var bb := BoxMesh.new()
+		bb.size = Vector3(0.3, 1.2, pit_box_spacing - 1.0)
+		band.mesh = bb
+		var team_mat := StandardMaterial3D.new()
+		team_mat.albedo_color = drivers[team].color
+		band.material_override = team_mat
+		band.transform = Transform3D(basis, front + out * 0.1 + Vector3(0, 5.6, 0))
+		add_child(band)
+		# Box marking on the lane
+		var mark := MeshInstance3D.new()
+		var mb := BoxMesh.new()
+		mb.size = Vector3(3.0, 0.02, 6.0)
+		mark.mesh = mb
+		mark.material_override = team_mat
+		mark.transform = Transform3D(basis, point_at(pit_in + d, pit_lateral(d) + pit_side * 1.8) + Vector3(0, _road_y(i) + 0.012, 0))
+		add_child(mark)
+
+
+## Like _ribbon but not closed into a loop.
+func _open_ribbon(left: PackedVector3Array, right: PackedVector3Array, color: Color) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_color(color)
+	for k in left.size() - 1:
+		for v in [left[k], right[k], right[k + 1], left[k], right[k + 1], left[k + 1]]:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(v)
+	return st.commit()
 
 
 func _build_grid() -> void:
@@ -506,6 +721,8 @@ func _build_walls(mat: Material) -> void:
 			var wp := points[i] + rights[i] * w * side
 			base[i] = wp
 			ok[i] = 0 if is_near_track(wp, KERB_WIDTH + 3.0) else 1
+			if side == pit_side and pit_progress(cum_dist[i]) >= -30.0 and pit_progress(cum_dist[i]) <= pit_len + 30.0:
+				ok[i] = 0  # the pit lane runs here instead
 		for i in n:
 			var j := (i + 1) % n
 			if not ok[i] or not ok[j]:
@@ -647,7 +864,7 @@ func _build_scenery() -> void:
 			var p := Vector3(gx + rng.randf_range(-4, 4), 0.0, gz + rng.randf_range(-4, 4))
 			gz += tile
 			# Sparse clumps rather than a carpet, and well clear of the barriers.
-			if rng.randf() > 0.45 or is_near_track(p, KERB_WIDTH + RUNOFF + tile * 0.75):
+			if rng.randf() > 0.45 or is_near_track(p, KERB_WIDTH + RUNOFF + tile * 0.75) or _in_pit_complex(p):
 				continue
 			var b := Basis(Vector3.UP, rng.randi_range(0, 3) * PI / 2.0) \
 					* Basis().scaled(Vector3.ONE * FOREST_SCALE * rng.randf_range(0.85, 1.15))
@@ -679,7 +896,7 @@ func _build_scenery() -> void:
 		for side: float in [-1.0, 1.0]:
 			var off := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 22.0
 			var p := points[i] + rights[i] * off * side
-			if is_near_track(p, KERB_WIDTH + RUNOFF + 12.0):
+			if is_near_track(p, KERB_WIDTH + RUNOFF + 12.0) or _in_pit_complex(p):
 				continue
 			var mi := MeshInstance3D.new()
 			mi.mesh = tents
@@ -699,7 +916,7 @@ func _build_scenery() -> void:
 	roof_mat.albedo_color = Color(0.8, 0.08, 0.06)
 	for s_at: float in [-150.0, -80.0, -10.0, 60.0]:
 		var i := index_at_distance(s_at)
-		for side: float in [1.0, -1.0]:
+		for side: float in [-pit_side]:
 			var off := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 6.0
 			var base := points[i] + rights[i] * off * side
 			if is_near_track(base + rights[i] * side * 12.0, KERB_WIDTH + RUNOFF + 1.0) \

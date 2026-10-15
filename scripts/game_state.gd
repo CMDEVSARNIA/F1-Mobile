@@ -60,6 +60,7 @@ var settings := {
 	"mirrored": false,
 	"haptics": true,
 	"auto_drs": false,
+	"start_compound": 1,
 	"camera": 0,
 }
 
