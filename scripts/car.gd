@@ -90,6 +90,48 @@ var penalty := 0.0  # seconds added at the flag
 ## Time trial: the clock starts at the line (flying lap), and running wide
 ## past the kerbs invalidates the lap, like qualifying.
 var flying_start := false
+
+# ------------------------------------------------------------ realistic handling
+# A planar two-axle ("bicycle") vehicle model: slip angles into a Pacejka-
+# style tyre curve, load transfer under braking/acceleration, aero downforce,
+# power-limited rear-wheel drive and a friction circle per axle, so cars can
+# understeer, oversteer, spin the rears or lock the fronts. Tuned so the
+# grip envelope matches the arcade model (and the AI) at every speed.
+const R_MASS := 800.0  # kg, car + driver
+const R_IZ := 1100.0  # yaw inertia, kg m^2
+const R_A := 1.95  # CG to front axle, m (46% of the weight on the front)
+const R_B := 1.65  # CG to rear axle, m
+const R_H := 0.30  # CG height, m
+const R_MU := 1.94  # peak tyre friction (soft-ish racing slick)
+const R_CLA := 4.95  # downforce coefficient x area
+const R_CDA := 1.1  # drag coefficient x area
+const R_RHO := 1.2
+const R_POWER := 600000.0  # W at the wheels
+const R_MAX_DRIVE := 14000.0  # N, clutch/diff limit at very low speed
+const R_BRAKE := 52000.0  # N, full pedal
+const R_BRAKE_FRONT := 0.56
+const TIRE_B_FRONT := 13.0  # cornering stiffness (peak force near 8 deg of slip)
+const TIRE_B_REAR := 15.0  # a stiffer, slightly grippier rear keeps the car stable
+const TIRE_REAR_GRIP := 1.05
+const TIRE_C := 1.45  # shape: how much grip is left once sliding
+## Stability control by TC level: body slip angle allowed before it steps in.
+const ESC_BETA := [INF, 0.16, 0.09]
+## Traction control by level (off / low / high): share of the rear grip
+## left over after cornering that the engine may use.
+const TC_LIMIT := [INF, 0.98, 0.92]
+var realistic := false
+var traction_control := 2
+var abs_enabled := true
+var wheelspin := 0.0  # 0..1, for sound and haptics
+var lockup := 0.0
+var _vx := 0.0
+var _vy := 0.0
+var _r := 0.0
+var _ax := 0.0
+var _ay := 0.0
+var _fy_r_prev := 0.0
+var _body_pitch := 0.0
+var _body_roll := 0.0
 var lap_valid := true
 var last_lap_valid := true
 
@@ -157,6 +199,7 @@ func _physics_process(dt: float) -> void:
 	if not controls_enabled and not finished:
 		# Held on the grid: no creeping, no reversing.
 		velocity = Vector3.ZERO
+		_r = 0.0
 		speed = 0.0
 		throttle = 0.0
 		_update_gear()
@@ -173,6 +216,7 @@ func _physics_process(dt: float) -> void:
 	_update_track_state()
 	if model:
 		model.update_visual(steer, speed, dt)
+	_update_body_motion(dt)
 
 
 func _player_input(dt: float) -> void:
@@ -290,6 +334,9 @@ func _integrate(dt: float) -> void:
 		if is_player and wear > 0.8 and not _worn_warned:
 			_worn_warned = true
 			pit_event.emit(self, "worn")
+	if realistic:
+		_integrate_realistic(dt, tg)
+		return
 
 	# Longitudinal
 	var accel := 0.0
@@ -350,6 +397,168 @@ func _integrate(dt: float) -> void:
 	global_position.y = 0.0
 	speed = velocity.dot(-global_transform.basis.z)
 	_update_gear()
+
+
+func _integrate_realistic(dt: float, tg: float) -> void:
+	tow = _compute_tow()
+	var basis := global_transform.basis
+	# Body frame: x forward, y to the LEFT, yaw rate positive turning left.
+	_vx = velocity.dot(-basis.z)
+	_vy = velocity.dot(-basis.x)
+	var steps := 3
+	var h := dt / steps
+	var spin_acc := 0.0
+	var lock_acc := 0.0
+	var slip_acc := 0.0
+	for k in steps:
+		var out := _realistic_step(h, tg)
+		spin_acc = maxf(spin_acc, out.x)
+		lock_acc = maxf(lock_acc, out.y)
+		slip_acc = maxf(slip_acc, out.z)
+		rotate_y(_r * h)
+	wheelspin = move_toward(wheelspin, spin_acc, dt * 6.0)
+	lockup = move_toward(lockup, lock_acc, dt * 6.0)
+	skid = move_toward(skid, clampf(maxf(slip_acc, maxf(wheelspin, lockup)), 0.0, 1.0), dt * 5.0)
+	basis = global_transform.basis
+	velocity = -basis.z * _vx - basis.x * _vy
+	velocity.y = 0.0
+	move_and_slide()
+	_impact_cooldown -= dt
+	for c in get_slide_collision_count():
+		var col := get_slide_collision(c)
+		var hit := absf(col.get_normal().dot(-basis.z))
+		var strength := hit * absf(_vx)
+		if strength > 2.0 and _impact_cooldown <= 0.0:
+			impact.emit(strength)
+			_impact_cooldown = 0.4
+		velocity *= 1.0 - 0.5 * hit * dt * 10.0
+		_r *= 1.0 - 0.6 * dt * 10.0  # walls kill rotation
+	global_position.y = 0.0
+	speed = velocity.dot(-global_transform.basis.z)
+	_update_gear()
+
+
+## One sub-step. Returns (wheelspin, lockup, tyre slide) amounts.
+func _realistic_step(h: float, tg: float) -> Vector3:
+	var L := R_A + R_B
+	var v := absf(_vx)
+	var grip := R_MU * tg * (0.5 if on_grass else 1.0)
+	var down := 0.5 * R_RHO * R_CLA * _vx * _vx
+	var transfer := R_MASS * _ax * R_H / L  # braking (ax < 0) loads the front
+	var fz_f := maxf(R_MASS * 9.81 * R_B / L + down * 0.45 - transfer, 200.0)
+	var fz_r := maxf(R_MASS * 9.81 * R_A / L + down * 0.55 + transfer, 200.0)
+	var cap_f := grip * fz_f
+	var cap_r := grip * fz_r * TIRE_REAR_GRIP
+
+	# Front wheel angle. Lock shrinks with speed so a touch input never asks
+	# for absurd slip angles at 300 km/h, like a speed-sensitive rack.
+	var dmax := clampf(0.38 - v * 0.0045, 0.065, 0.38)
+	var delta := -steer * dmax
+	# Slip-angle limiter: full lock asks the fronts for (a bit past) their
+	# peak grip, never more, the way a good driver feels the wheel. Keeps
+	# digital touch steering from scrubbing the fronts and snapping the rear.
+	if v > 4.0:
+		var peak := tan(PI / (2.0 * TIRE_C)) / TIRE_B_FRONT
+		var path := atan2(_vy + R_A * _r, v)
+		delta = clampf(delta, path - 1.25 * peak, path + 1.25 * peak)
+
+	# Longitudinal demand per axle (rear-wheel drive)
+	var fx_f := 0.0
+	var fx_r := 0.0
+	if throttle > 0.01 and _vx > -0.5:
+		fx_r += throttle * minf(R_POWER / maxf(v, 4.0), R_MAX_DRIVE) * (0.6 if on_grass else 1.0)
+	if brake > 0.01:
+		if _vx > 0.5:
+			fx_f -= brake * R_BRAKE * R_BRAKE_FRONT
+			fx_r -= brake * R_BRAKE * (1.0 - R_BRAKE_FRONT)
+		elif throttle < 0.01 and _vx > -REVERSE_SPEED:
+			fx_r -= brake * 4000.0  # reverse gear
+	# Driver aids. TC works on the friction circle: only the grip the rear
+	# isn't already using to corner is available for drive.
+	if fx_r > 0.0 and traction_control > 0:
+		var room := sqrt(maxf(cap_r * cap_r - _fy_r_prev * _fy_r_prev, 0.0))
+		fx_r = minf(fx_r, TC_LIMIT[traction_control] * room)
+	if abs_enabled:
+		fx_f = maxf(fx_f, -0.96 * cap_f)
+		fx_r = maxf(fx_r, -0.96 * cap_r)
+	# Friction circle: past the limit the axle slides (wheelspin or lock-up)
+	# and keeps only a little lateral grip.
+	var spin := 0.0
+	var lock := 0.0
+	var lat_f := sqrt(maxf(cap_f * cap_f - fx_f * fx_f, 0.0))
+	var lat_r := sqrt(maxf(cap_r * cap_r - fx_r * fx_r, 0.0))
+	if absf(fx_f) > cap_f:
+		lock = 1.0
+		fx_f = signf(fx_f) * cap_f * 0.85
+		lat_f = cap_f * 0.3
+	if absf(fx_r) > cap_r:
+		if fx_r > 0.0:
+			spin = clampf(fx_r / cap_r - 1.0 + 0.5, 0.0, 1.0)
+		else:
+			lock = 1.0
+		fx_r = signf(fx_r) * cap_r * 0.85
+		lat_r = cap_r * 0.3
+
+	# Slip angles and tyre forces (low speed floor keeps them finite)
+	var vxs := maxf(v, 3.0)
+	var dir := 1.0 if _vx >= -0.5 else -1.0
+	var alpha_f := atan2(_vy + R_A * _r, vxs) - delta * dir
+	var alpha_r := atan2(_vy - R_B * _r, vxs)
+	var fy_f := -lat_f * sin(TIRE_C * atan(TIRE_B_FRONT * alpha_f))
+	var fy_r := -lat_r * sin(TIRE_C * atan(TIRE_B_REAR * alpha_r))
+	_fy_r_prev = fy_r
+
+	# Resistances: aero drag (cut by DRS and tow), rolling, grass
+	var aero := 0.5 * R_RHO * R_CDA * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
+	var resist := aero * _vx * absf(_vx) + 200.0 * signf(_vx)
+	if on_grass:
+		resist += R_MASS * (0.004 * _vx * absf(_vx) + 2.0 * signf(_vx))
+
+	var cd := cos(delta)
+	var sd := sin(delta)
+	var fx := fx_r + fx_f * cd - fy_f * sd - resist
+	var fy := fx_f * sd + fy_f * cd + fy_r
+	var mz := R_A * (fx_f * sd + fy_f * cd) - R_B * fy_r
+	var ax := fx / R_MASS + _vy * _r
+	var ay := fy / R_MASS - _vx * _r
+	var prev_vx := _vx
+	_vx += ax * h
+	_vy += ay * h
+	_r += mz / R_IZ * h
+	# Don't let the brakes drive the car backwards through zero.
+	if brake > 0.01 and throttle < 0.01 and prev_vx > 0.0 and _vx < 0.0:
+		_vx = 0.0
+	if throttle < 0.01 and brake < 0.01 and absf(_vx) < 0.3:
+		_vx = 0.0
+	_ax = lerpf(_ax, fx / R_MASS, 0.25)
+	_ay = lerpf(_ay, fy / R_MASS, 0.25)
+	# Below walking pace slip angles are meaningless: blend to rolling motion.
+	var k := clampf((v - 2.0) / 4.0, 0.0, 1.0)
+	if k < 1.0:
+		_r = lerpf(_vx * tan(delta) / L, _r, k)
+		_vy = lerpf(0.0, _vy, k)
+	# Stability control: when the car slides past the allowed body slip
+	# angle, yaw it back toward where it's travelling (like brake-based ESC).
+	if v > 6.0 and traction_control > 0:
+		var beta := atan2(_vy, v)
+		var excess: float = absf(beta) - ESC_BETA[traction_control]
+		if excess > 0.0:
+			_r += signf(beta) * excess * 14.0 * h * v / 20.0
+	var slide := maxf(absf(alpha_f), absf(alpha_r)) / 0.12 - 0.7
+	return Vector3(spin, lock, slide)
+
+
+func _update_body_motion(dt: float) -> void:
+	# Visual pitch and roll from the car's accelerations (weight transfer).
+	var ax := _ax
+	var ay := _ay
+	if not realistic:
+		ax = 0.0
+		ay = 0.0
+	_body_pitch = lerpf(_body_pitch, clampf(ax / 9.81 * 0.012, -0.05, 0.05), clampf(dt * 8.0, 0.0, 1.0))
+	_body_roll = lerpf(_body_roll, clampf(-ay / 9.81 * 0.008, -0.05, 0.05), clampf(dt * 8.0, 0.0, 1.0))
+	if model:
+		model.rotation = Vector3(_body_pitch, 0.0, _body_roll)
 
 
 func _update_gear() -> void:
@@ -478,6 +687,19 @@ func _update_pit(prev_pos: float) -> void:
 
 func _pit_drive(dt: float) -> void:
 	var d := track.pit_progress(lap_pos)
+	# Stalled against something in the lane: put the car back on the lane line.
+	if _pit_state != 1 and absf(speed) < 1.0:
+		_stuck_time += dt
+		if _stuck_time > 2.0:
+			_stuck_time = 0.0
+			var s := lap_pos + 4.0
+			var p := track.point_at(s, track.pit_lateral(d + 4.0))
+			var ahead := track.point_at(s + 3.0, track.pit_lateral(d + 7.0))
+			global_transform = Transform3D(Basis.IDENTITY, p).looking_at(ahead, Vector3.UP)
+			velocity = Vector3.ZERO
+			_r = 0.0
+	else:
+		_stuck_time = 0.0
 	var look := clampf(absf(speed) * 0.4, 6.0, 20.0)
 	var aim := track.point_at(lap_pos + look, track.pit_lateral(d + look))
 	var local := global_transform.affine_inverse() * aim
@@ -496,6 +718,7 @@ func _pit_drive(dt: float) -> void:
 			pit_event.emit(self, "stop")
 		if _pit_state == 1:
 			velocity = Vector3.ZERO
+			_r = 0.0
 			throttle = 0.0
 			brake = 1.0
 			_pit_timer -= dt
@@ -578,6 +801,8 @@ func reset_to_track() -> void:
 	var s := lap_pos - 15.0
 	global_transform = track.transform_at(s, 0.0)
 	velocity = Vector3.ZERO
+	_r = 0.0
+	_ax = 0.0
 	speed = 0.0
 	track_idx = track.closest_index_local(global_position, track_idx, 30)
 	var proj := track.project(global_position, track_idx)

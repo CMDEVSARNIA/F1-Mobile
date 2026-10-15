@@ -308,9 +308,10 @@ func _start_button(text: String, cb: Callable) -> void:
 func _controls_button() -> void:
 	var s := GameState.settings
 	var assists := ["off", "low", "high"]
-	var b := _button(_right, "CONTROLS & ASSISTS  ›\n%s  ·  %s gas  ·  brake assist %s" % [
+	var b := _button(_right, "CONTROLS & ASSISTS  ›\n%s  ·  %s  ·  %s gas  ·  TC %s" % [
 			["Arrows", "Wheel", "Tilt"][clampi(s.steering, 0, 2)],
-			"Auto" if s.auto_throttle else "Manual", assists[clampi(s.braking_assist, 0, 2)]], _open_controls)
+			"Realistic" if s.handling == 1 else "Arcade",
+			"Auto" if s.auto_throttle else "Manual", assists[clampi(s.traction_control, 0, 2)]], _open_controls)
 	b.custom_minimum_size.y = 80
 	b.add_theme_font_size_override("font_size", 20)
 

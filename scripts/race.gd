@@ -220,6 +220,9 @@ func _apply_controls() -> void:
 	player.auto_throttle = s.auto_throttle
 	player.braking_assist = s.braking_assist
 	player.auto_drs = s.auto_drs
+	player.realistic = s.handling == 1
+	player.traction_control = s.traction_control
+	player.abs_enabled = s.abs
 	var t := hud.touch
 	t.steer_mode = s.steering
 	t.auto_throttle = s.auto_throttle

@@ -364,7 +364,9 @@ func _build_pit() -> void:
 	wall.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var wall_off := (pit_offset - PIT_LANE_WIDTH / 2.0 - 1.0)
 	var garage_off := pit_offset + PIT_LANE_WIDTH / 2.0 + 0.5
-	for spec in [[wall_off, pit_ramp - 10.0, pit_len - pit_ramp + 10.0, 1.1, Color(0.85, 0.85, 0.88)],
+	# The pit wall only starts once the lane is fully clear of the track, so
+	# its end can't be hit head-on from the racing line.
+	for spec in [[wall_off, pit_ramp + 15.0, pit_len - pit_ramp - 15.0, 1.1, Color(0.85, 0.85, 0.88)],
 			[garage_off, pit_ramp, pit_len - pit_ramp, 1.2, Color(0.5, 0.5, 0.55)]]:
 		var segs := int((spec[2] - spec[1]) / 6.0)
 		for k in segs:

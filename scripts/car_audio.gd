@@ -12,6 +12,7 @@ var positional := false
 var _engine: Node
 var _skid: Node
 var _impact: Node
+var _buzz_timer := 0.0
 
 
 func _ready() -> void:
@@ -48,6 +49,12 @@ func _process(dt: float) -> void:
 	var vol: float = base - 9.0 * (1.0 - car.throttle)
 	_engine.volume_db = lerpf(_engine.volume_db, vol, clampf(dt * 6.0, 0.0, 1.0))
 
+	# Feel the tyres let go: short pulses on wheelspin or lock-up.
+	_buzz_timer -= dt
+	if not positional and _buzz_timer <= 0.0 and (car.wheelspin > 0.5 or car.lockup > 0.5) \
+			and GameState.settings.haptics and OS.has_feature("mobile"):
+		Input.vibrate_handheld(18)
+		_buzz_timer = 0.15
 	if car.skid > 0.2:
 		if not _skid.playing:
 			_skid.play()

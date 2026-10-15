@@ -62,6 +62,9 @@ var settings := {
 	"auto_drs": false,
 	"start_compound": 1,
 	"music": true,
+	"handling": 1,  # 1 realistic, 0 arcade
+	"traction_control": 2,  # 0 off, 1 low, 2 high
+	"abs": true,
 	"camera": 0,
 }
 

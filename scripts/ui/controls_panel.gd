@@ -8,24 +8,39 @@ signal recalibrate_requested
 
 const DOTS := ["●○○○○", "●●○○○", "●●●○○", "●●●●○", "●●●●●"]
 
-## key, label, values, display names
-const OPTIONS := [
-	["steering", "Steering", [0, 1, 2], ["Arrows", "Wheel (drag)", "Tilt"]],
-	["steer_sensitivity", "Sensitivity", [0.6, 0.8, 1.0, 1.25, 1.5], DOTS],
-	["tilt_invert", "Tilt direction", [false, true], ["Normal", "Inverted"]],
-	["steer_assist", "Steering assist", [0, 1, 2], ["Off", "Low", "High"]],
-	["auto_throttle", "Throttle", [true, false], ["Auto", "Manual (Pro)"]],
-	["braking_assist", "Braking assist", [0, 1, 2], ["Off", "Low", "High"]],
-	["control_size", "Button size", [0.85, 1.0, 1.2], ["Small", "Medium", "Large"]],
-	["control_opacity", "Button opacity", [0.4, 0.75, 1.0], ["Low", "Medium", "High"]],
-	["mirrored", "Layout", [false, true], ["Steer left", "Steer right"]],
-	["auto_drs", "DRS", [false, true], ["Tap to open", "Automatic"]],
-	["haptics", "Vibration", [true, false], ["On", "Off"]],
-	["music", "Menu music", [true, false], ["On", "Off"]],
-]
+## Two tabs of [key, label, values, display names].
+const TABS := {
+	"CONTROLS": [
+		["steering", "Steering", [0, 1, 2], ["Arrows", "Wheel (drag)", "Tilt"]],
+		["steer_sensitivity", "Sensitivity", [0.6, 0.8, 1.0, 1.25, 1.5], DOTS],
+		["tilt_invert", "Tilt direction", [false, true], ["Normal", "Inverted"]],
+		["mirrored", "Layout", [false, true], ["Steer left", "Steer right"]],
+		["control_size", "Button size", [0.85, 1.0, 1.2], ["Small", "Medium", "Large"]],
+		["control_opacity", "Button opacity", [0.4, 0.75, 1.0], ["Low", "Medium", "High"]],
+		["haptics", "Vibration", [true, false], ["On", "Off"]],
+		["music", "Menu music", [true, false], ["On", "Off"]],
+	],
+	"DRIVING": [
+		["handling", "Handling", [1, 0], ["Realistic", "Arcade"]],
+		["traction_control", "Traction ctrl", [2, 1, 0], ["High", "Low", "Off"]],
+		["abs", "ABS", [true, false], ["On", "Off"]],
+		["auto_throttle", "Throttle", [true, false], ["Auto", "Manual (Pro)"]],
+		["braking_assist", "Braking assist", [0, 1, 2], ["Off", "Low", "High"]],
+		["steer_assist", "Steering assist", [0, 1, 2], ["Off", "Low", "High"]],
+		["auto_drs", "DRS", [false, true], ["Tap to open", "Automatic"]],
+	],
+}
+const HINTS := {
+	"CONTROLS": "Tilt straightens itself at lights out: hold the phone how you'll race.",
+	"DRIVING": "Realistic: the tyres can slide, lock and spin. Traction control and ABS catch it; turn them off for full control.",
+}
 
 var in_race := false
 var _value_labels := {}
+var _tab := "CONTROLS"
+var _grid: GridContainer
+var _hint: Label
+var _tab_buttons := {}
 
 
 func _ready() -> void:
@@ -46,19 +61,24 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 14)
 	panel.add_child(box)
 
-	var title := Label.new()
-	title.text = "CONTROLS & ASSISTS"
-	title.add_theme_font_size_override("font_size", 32)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(title)
+	var tabs := HBoxContainer.new()
+	tabs.alignment = BoxContainer.ALIGNMENT_CENTER
+	tabs.add_theme_constant_override("separation", 12)
+	box.add_child(tabs)
+	for name: String in TABS:
+		var t := _button(name, 24)
+		t.toggle_mode = true
+		t.custom_minimum_size = Vector2(240, 56)
+		t.pressed.connect(_show_tab.bind(name))
+		tabs.add_child(t)
+		_tab_buttons[name] = t
 
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 36)
-	grid.add_theme_constant_override("v_separation", 8)
-	box.add_child(grid)
-	for opt in OPTIONS:
-		grid.add_child(_row(opt))
+	_grid = GridContainer.new()
+	_grid.columns = 2
+	_grid.add_theme_constant_override("h_separation", 36)
+	_grid.add_theme_constant_override("v_separation", 8)
+	_grid.custom_minimum_size = Vector2(0, 4 * 60)
+	box.add_child(_grid)
 
 	var footer := HBoxContainer.new()
 	footer.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -75,12 +95,24 @@ func _ready() -> void:
 	done.pressed.connect(_close)
 	footer.add_child(done)
 
-	var hint := Label.new()
-	hint.text = "Tilt straightens itself at lights out: hold the phone how you'll race."
-	hint.add_theme_font_size_override("font_size", 16)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(hint)
+	_hint = Label.new()
+	_hint.add_theme_font_size_override("font_size", 16)
+	_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_hint)
+	_show_tab(_tab)
+
+
+func _show_tab(name: String) -> void:
+	_tab = name
+	for t in _tab_buttons:
+		_tab_buttons[t].button_pressed = t == name
+	for c in _grid.get_children():
+		c.queue_free()
+	_value_labels.clear()
+	for opt in TABS[name]:
+		_grid.add_child(_row(opt))
+	_hint.text = HINTS[name]
 	_refresh()
 
 
@@ -139,11 +171,16 @@ func _index_of(values: Array, v) -> int:
 
 func _refresh() -> void:
 	var tilt: bool = GameState.settings.steering == 2
-	for opt in OPTIONS:
+	var realistic: bool = GameState.settings.handling == 1
+	for opt in TABS[_tab]:
 		var label: Label = _value_labels[opt[0]]
 		label.text = opt[3][_index_of(opt[2], GameState.settings[opt[0]])]
-		# Grey out what doesn't apply to the current steering mode.
-		var applies: bool = not (opt[0] == "tilt_invert" and not tilt)
+		# Grey out what doesn't apply to the current setup.
+		var applies := true
+		if opt[0] == "tilt_invert" and not tilt:
+			applies = false
+		if opt[0] in ["traction_control", "abs"] and not realistic:
+			applies = false
 		label.get_parent().modulate.a = 1.0 if applies else 0.4
 
 

@@ -11,7 +11,7 @@ code and data, so the project runs with no third-party art.
 | --- | --- |
 | 20 real circuits in calendar order (Albert Park to Yas Marina, plus Sepang, Hockenheim, Nurburgring, Sochi) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
 | Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
-| Arcade car physics: bicycle-model steering, downforce grip that grows with speed (~2g slow, ~5g fast), ~335 km/h top speed, grass penalty, reverse | `scripts/car.gd` |
+| Handling: **Realistic** (default) planar vehicle dynamics: slip angles into a Pacejka-style tyre curve, 46/54 weight distribution with load transfer, speed-squared downforce, 600 kW rear-wheel drive, friction circle (wheelspin, lock-ups, power oversteer), speed-sensitive steering with a slip-angle limiter, traction control / stability control (Off/Low/High) and ABS, visible pitch and roll. **Arcade** model kept as an option and for the AI | `scripts/car.gd` |
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
 | Clean low-poly modern F1 car modelled in code: lofted nose and sidepods, halo, multi-element wings, DRS flap, compound-coloured tyres, two-tone team liveries | `scripts/lowpoly_car.gd`, `scripts/car_model.gd` |
 | DRS and slipstream: zones auto-placed on each circuit's two longest straights with detection boards, 1-second rule from lap 2, tap DRS button (or automatic), flap animates, closes on braking; tow behind any car within 30 m | `scripts/track.gd`, `scripts/car.gd` |
