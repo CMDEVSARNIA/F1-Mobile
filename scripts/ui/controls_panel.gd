@@ -19,6 +19,7 @@ const OPTIONS := [
 	["control_size", "Button size", [0.85, 1.0, 1.2], ["Small", "Medium", "Large"]],
 	["control_opacity", "Button opacity", [0.4, 0.75, 1.0], ["Low", "Medium", "High"]],
 	["mirrored", "Layout", [false, true], ["Steer left", "Steer right"]],
+	["auto_drs", "DRS", [false, true], ["Tap to open", "Automatic"]],
 	["haptics", "Vibration", [true, false], ["On", "Off"]],
 ]
 

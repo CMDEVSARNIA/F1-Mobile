@@ -156,6 +156,7 @@ func _apply_controls() -> void:
 	player.steer_assist = s.steer_assist
 	player.auto_throttle = s.auto_throttle
 	player.braking_assist = s.braking_assist
+	player.auto_drs = s.auto_drs
 	var t := hud.touch
 	t.steer_mode = s.steering
 	t.auto_throttle = s.auto_throttle

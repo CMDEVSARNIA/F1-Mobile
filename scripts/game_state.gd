@@ -59,6 +59,7 @@ var settings := {
 	"control_opacity": 0.75,
 	"mirrored": false,
 	"haptics": true,
+	"auto_drs": false,
 	"camera": 0,
 }
 
@@ -171,6 +172,7 @@ func _setup_input() -> void:
 		"camera": [KEY_C],
 		"reset_car": [KEY_R],
 		"pause": [KEY_ESCAPE, KEY_P],
+		"drs": [KEY_E, KEY_SHIFT],
 	}
 	for action in bindings:
 		if not InputMap.has_action(action):
@@ -189,6 +191,9 @@ func _setup_input() -> void:
 		ev.axis = pad[action]
 		ev.axis_value = 1.0
 		InputMap.action_add_event(action, ev)
+	var drs_pad := InputEventJoypadButton.new()
+	drs_pad.button_index = JOY_BUTTON_A
+	InputMap.action_add_event("drs", drs_pad)
 	for pair in [["steer_left", -1.0], ["steer_right", 1.0]]:
 		var ev := InputEventJoypadMotion.new()
 		ev.axis = JOY_AXIS_LEFT_X

@@ -145,6 +145,9 @@ func update_telemetry(car, position: int, total: int, laps: int, now: float, rac
 	dashboard.rpm = car.rpm
 	dashboard.throttle = car.throttle
 	dashboard.brake = car.brake
+	dashboard.drs_state = car.drs_state()
+	dashboard.tow = car.tow
+	touch.drs_state = car.drs_state()
 
 
 func _process(dt: float) -> void:

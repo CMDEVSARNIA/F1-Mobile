@@ -27,6 +27,8 @@ var curvature := PackedFloat32Array()  # signed, + = right-hand corner
 var target_speed := PackedFloat32Array()
 var length := 0.0
 var bounds := Rect2()
+## [{detect, start, end}] in metres along the lap, on the longest straights.
+var drs_zones: Array = []
 
 var _grid := {}
 
@@ -36,8 +38,10 @@ func build(csv_path: String) -> bool:
 		return false
 	_compute_frames()
 	_compute_speed_profile()
+	_compute_drs_zones()
 	_build_grid()
 	_build_meshes()
+	_build_drs_markers()
 	_build_scenery()
 	return true
 
@@ -117,6 +121,111 @@ func _compute_speed_profile() -> void:
 			var ds := points[j].distance_to(points[nxt])
 			var v_lim := sqrt(target_speed[nxt] * target_speed[nxt] + 2.0 * AI_PLAN_DECEL * ds)
 			target_speed[j] = minf(target_speed[j], v_lim)
+
+
+## Like the real thing: zones on the longest straights, activation a little
+## after the straight begins, detection 200 m before that.
+func _compute_drs_zones() -> void:
+	var n := points.size()
+	var straight := PackedByteArray()
+	straight.resize(n)
+	var first_bend := -1
+	for i in n:
+		straight[i] = 1 if absf(curvature[i]) < 1.0 / 450.0 else 0
+		if first_bend == -1 and not straight[i]:
+			first_bend = i
+	if first_bend == -1:
+		return
+	var runs := []
+	var i := 0
+	while i < n:
+		var idx := (first_bend + i) % n
+		if straight[idx]:
+			var start := idx
+			var count := 0
+			while count < n and straight[(start + count) % n]:
+				count += 1
+			var s0 := cum_dist[start]
+			var s1 := cum_dist[(start + count - 1) % n]
+			var run_len := fposmod(s1 - s0, length)
+			if run_len > 500.0:
+				runs.append([run_len, s0, s1])
+			i += count
+		else:
+			i += 1
+	runs.sort_custom(func(a, b): return a[0] > b[0])
+	for r in runs.slice(0, 2):
+		var start := fposmod(r[1] + 70.0, length)
+		drs_zones.append({
+			"detect": fposmod(start - 200.0, length),
+			"start": start,
+			"end": fposmod(r[2] - 40.0, length),
+		})
+
+
+func _build_drs_markers() -> void:
+	var board := StandardMaterial3D.new()
+	board.albedo_color = Color(0.95, 0.95, 0.95)
+	var post := StandardMaterial3D.new()
+	post.albedo_color = Color(0.2, 0.2, 0.22)
+	var line_mat := StandardMaterial3D.new()
+	line_mat.albedo_color = Color(0.95, 0.95, 0.95)
+	for z: Dictionary in drs_zones:
+		for spec in [[z.detect, "DRS\nDETECTION", 0.06], [z.start, "DRS", 0.2]]:
+			var i := index_at_distance(spec[0])
+			# Line across the track
+			var line := MeshInstance3D.new()
+			var lb := BoxMesh.new()
+			lb.size = Vector3(width_left[i] + width_right[i], 0.02, 0.35)
+			line.mesh = lb
+			line.material_override = line_mat
+			var c := points[i] + rights[i] * (width_right[i] - width_left[i]) / 2.0
+			line.transform = Transform3D(Basis.looking_at(tangents[i], Vector3.UP), c + Vector3(0, _road_y(i) + 0.012, 0))
+			add_child(line)
+			# Board on a post beside the track, facing oncoming cars
+			var side := 1.0 if not is_near_track(points[i] + rights[i] * (width_right[i] + 5.0), 0.0) else -1.0
+			var at := points[i] + rights[i] * side * ((width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + 2.5)
+			var basis := Basis.looking_at(-tangents[i], Vector3.UP)
+			var p := MeshInstance3D.new()
+			var pm := BoxMesh.new()
+			pm.size = Vector3(0.12, 2.2, 0.12)
+			p.mesh = pm
+			p.material_override = post
+			p.position = at + Vector3(0, 1.1, 0)
+			add_child(p)
+			var b := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(2.0, 1.1, 0.08)
+			b.mesh = bm
+			b.material_override = board
+			b.transform = Transform3D(basis, at + Vector3(0, 2.4, 0))
+			add_child(b)
+			var label := Label3D.new()
+			label.text = spec[1]
+			label.font_size = 96
+			label.pixel_size = 0.006 if spec[1] == "DRS" else 0.0045
+			label.modulate = Color(0.05, 0.05, 0.05)
+			label.outline_size = 0
+			label.transform = Transform3D(basis, at + Vector3(0, 2.4, 0) - tangents[i] * 0.06)
+			add_child(label)
+
+
+func in_drs_zone(s: float) -> int:
+	for k in drs_zones.size():
+		if _in_range(s, drs_zones[k].start, drs_zones[k].end):
+			return k
+	return -1
+
+
+static func _in_range(x: float, a: float, b: float) -> bool:
+	return (x >= a and x <= b) if a <= b else (x >= a or x <= b)
+
+
+## True if travelling from `a` to `b` along the lap passed point `p`.
+static func crossed(a: float, b: float, p: float) -> bool:
+	if b >= a:
+		return a < p and p <= b
+	return p > a or p <= b
 
 
 func _build_grid() -> void:

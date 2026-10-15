@@ -22,6 +22,12 @@ var size_mult := 1.0  # control size setting
 var wheel_sensitivity := 1.0  # less drag needed for full lock when higher
 ## Steering on the right thumb, pedals on the left (GRID's "Mirrored Mode").
 var mirrored := false
+## 0 hidden-ish, 1 available (pulses), 2 open. Set by the race each frame.
+var drs_state := 0:
+	set(v):
+		if v != drs_state:
+			drs_state = v
+			queue_redraw()
 
 var _touches := {}  # finger index -> {zone, start, pos}
 var _u := 1.0  # UI scale relative to 720p
@@ -62,6 +68,11 @@ func _arrow_centers() -> Array[Vector2]:
 	return [Vector2(a[0], s.y - 130 * _u), Vector2(a[1], s.y - 130 * _u)]
 
 
+func _drs_rect() -> Rect2:
+	var s := _size()
+	return Rect2(s.x - 200 * _u, s.y - 385 * _u, 170 * _u, 78 * _u)
+
+
 ## Pedal rects in un-mirrored layout space (use _flip_rect to draw).
 func _pedal_rects() -> Dictionary:
 	var s := _size()
@@ -81,6 +92,8 @@ func _zone_at(screen_p: Vector2) -> String:
 	var p := Vector2(_flip_x(screen_p.x), screen_p.y)
 	if p.y < s.y * 0.38:
 		return ""
+	if _drs_rect().grow(10 * _u).has_point(p):
+		return "drs"
 	var pedals := _pedal_rects()
 	if auto_throttle:
 		if p.x > s.x * 0.62:
@@ -155,6 +168,7 @@ func _apply() -> void:
 	_set_action("steer_right", maxf(_steer, 0.0))
 	_set_action("brake", 1.0 if active.has("brake") else 0.0)
 	_set_action("accelerate", 1.0 if active.has("throttle") else 0.0)
+	_set_action("drs", 1.0 if active.has("drs") else 0.0)
 	queue_redraw()
 
 
@@ -192,10 +206,37 @@ func _draw() -> void:
 			var center := _wheel_center if wheel_touch else Vector2(_flip_x(210 * _u), s.y - 190 * _u)
 			_draw_wheel(center, wheel_touch)
 
+	_draw_drs(_flip_rect(_drs_rect()), active.has("drs"), font)
+
 	var pedals := _pedal_rects()
 	for name: String in pedals:
 		var col := GAS_COLOR if name == "throttle" else BRAKE_COLOR
 		_draw_pedal(_flip_rect(pedals[name]), col, "GAS" if name == "throttle" else "BRAKE", active.has(name), font)
+
+
+func _draw_drs(r: Rect2, pressed: bool, font: Font) -> void:
+	var green := Color(0.2, 0.95, 0.4)
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 120.0)
+	var fill := Color(0.04, 0.04, 0.07, 0.35)
+	var border := Color(1, 1, 1, 0.25)
+	var text := Color(1, 1, 1, 0.35)
+	match drs_state:
+		1:
+			fill = Color(green.darkened(0.6), 0.45 + 0.3 * pulse)
+			border = Color(green, 0.95)
+			text = Color.WHITE
+			queue_redraw()  # keep pulsing
+		2:
+			fill = Color(green, 0.85)
+			border = Color.WHITE
+			text = Color(0.02, 0.1, 0.04)
+	if pressed:
+		r = r.grow(-4 * _u)
+	_panel_box(fill, border, 39 * _u, 3 * _u).draw(get_canvas_item(), r)
+	var fs := int(30 * _u)
+	var ts := font.get_string_size("DRS", HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+	draw_string(font, r.get_center() + Vector2(-ts.x / 2.0, ts.y * 0.3), "DRS",
+			HORIZONTAL_ALIGNMENT_CENTER, -1, fs, text)
 
 
 func _panel_box(fill: Color, border: Color, radius: float, width: float) -> StyleBoxFlat:

@@ -60,6 +60,16 @@ var clock := 0.0  # game time; stops while paused, unlike wall-clock time
 var _stuck_time := 0.0
 var _max_lap := 0
 
+# DRS & slipstream
+const DRS_DRAG := 0.62  # aero drag multiplier with the flap open
+const TOW_RANGE := 30.0  # metres behind another car where the tow works
+var drs_from_lap := 2  # race rule; 0 = always allowed (time trial)
+var auto_drs := false
+var drs_armed := false  # within 1 s at detection, so DRS may open in the zone
+var drs_open := false
+var tow := 0.0  # 0..1
+var _drs_zone := -1
+
 signal lap_completed(car, lap_time: float)
 signal crossed_finish(car)
 signal impact(strength: float)
@@ -239,8 +249,11 @@ func _integrate(dt: float) -> void:
 			accel -= brake * 6.0  # reverse
 		elif v_long < -0.5:
 			accel += brake * 10.0
-	# Aero drag + rolling resistance, plus heavy drag on grass.
-	var drag := 0.25 + 0.0004 * v_long * v_long
+	# Aero drag + rolling resistance, plus heavy drag on grass. An open DRS
+	# flap and a car ahead's wake both cut the aero part.
+	tow = _compute_tow()
+	var aero := 0.0004 * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
+	var drag := 0.25 + aero * v_long * v_long
 	if on_grass:
 		drag += 0.004 * v_long * v_long + 2.0
 	accel -= signf(v_long) * drag
@@ -311,11 +324,63 @@ func _update_track_state() -> void:
 	elif prev_pos < L * 0.25 and lap_pos > L * 0.75 and lap > 0:
 		lap -= 1  # reversed back over the line
 	race_dist = (lap - 1) * L + lap_pos
+	_update_drs(prev_pos)
 	var hw := track.half_width(track_idx, lateral)
 	on_grass = absf(lateral) > hw + Track.KERB_WIDTH * 0.8
 	wrong_way = absf(speed) > 5.0 and (-global_transform.basis.z).dot(track.tangents[track_idx]) < -0.3
 	if absf(lateral) > hw + Track.KERB_WIDTH + Track.RUNOFF + 25.0:
 		reset_to_track()
+
+
+func drs_available() -> bool:
+	return drs_armed and _drs_zone != -1 and not drs_open
+
+
+## 0 = nothing, 1 = can open now, 2 = open. For the HUD.
+func drs_state() -> int:
+	return 2 if drs_open else (1 if drs_available() else 0)
+
+
+func gap_ahead_seconds() -> float:
+	var best := INF
+	for o in others:
+		if o == self:
+			continue
+		var d: float = o.race_dist - race_dist
+		if d > 0.0 and d < best:
+			best = d
+	return best / maxf(absf(speed), 20.0)
+
+
+func _update_drs(prev_pos: float) -> void:
+	for z: Dictionary in track.drs_zones:
+		if Track.crossed(prev_pos, lap_pos, z.detect):
+			drs_armed = lap >= drs_from_lap and (drs_from_lap == 0 or gap_ahead_seconds() < 1.0)
+	var zone := track.in_drs_zone(lap_pos)
+	if zone == -1 and _drs_zone != -1:
+		drs_armed = false  # each activation is used up at the end of its zone
+	_drs_zone = zone
+	if zone == -1 or brake > 0.1:
+		if drs_open:
+			drs_armed = false
+		drs_open = false
+	elif drs_available() and (not is_player or auto_drs or Input.is_action_just_pressed("drs")):
+		drs_open = true
+	if model:
+		model.set_drs(drs_open)
+
+
+func _compute_tow() -> float:
+	if absf(speed) < 30.0:
+		return 0.0
+	var best := 0.0
+	for o in others:
+		if o == self:
+			continue
+		var d: float = o.race_dist - race_dist
+		if d > 3.0 and d < TOW_RANGE and absf(o.lateral - lateral) < 2.2:
+			best = maxf(best, 1.0 - d / TOW_RANGE)
+	return best
 
 
 func _on_cross_line() -> void:

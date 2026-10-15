@@ -10,6 +10,8 @@ var speed_kmh := 0
 var rpm := 4000.0
 var throttle := 0.0
 var brake := 0.0
+var drs_state := 0  # 0 off, 1 available, 2 open
+var tow := 0.0
 var _flash := 0.0
 
 
@@ -64,9 +66,28 @@ func _draw() -> void:
 	draw_string(font, Vector2(size.x / 2.0 + ssz.x / 2.0 + 6 * u, 128 * u), unit,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, us, Color(1, 1, 1, 0.55))
 
+	# DRS and slipstream lamps either side of the gear
+	var green := Color(0.2, 0.95, 0.4)
+	var drs_col := Color(1, 1, 1, 0.18)
+	if drs_state == 1:
+		drs_col = green if fmod(_flash, 0.5) < 0.3 else Color(green, 0.4)
+	elif drs_state == 2:
+		drs_col = green
+	_lamp(Vector2(52 * u, 48 * u), "DRS", drs_col, u, font)
+	_lamp(Vector2(size.x - 52 * u, 48 * u), "TOW", Color(0.35, 0.75, 1.0, 0.2 + 0.8 * tow) if tow > 0.05 else Color(1, 1, 1, 0.18), u, font)
+
 	# Pedal bars at the sides
 	_bar(Rect2(18 * u, 38 * u, 12 * u, 96 * u), brake, Color(0.95, 0.2, 0.15))
 	_bar(Rect2(size.x - 30 * u, 38 * u, 12 * u, 96 * u), throttle, Color(0.15, 0.9, 0.35))
+
+
+func _lamp(c: Vector2, text: String, col: Color, u: float, font: Font) -> void:
+	var fs := int(15 * u)
+	var ts := font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs)
+	var r := Rect2(c - Vector2(ts.x / 2.0 + 7 * u, 11 * u), Vector2(ts.x + 14 * u, 22 * u))
+	draw_rect(r, Color(col, col.a * 0.25))
+	draw_rect(r, col, false, 2.0 * u)
+	draw_string(font, Vector2(c.x - ts.x / 2.0, c.y + ts.y * 0.32), text, HORIZONTAL_ALIGNMENT_CENTER, -1, fs, col)
 
 
 func _bar(r: Rect2, v: float, col: Color) -> void:

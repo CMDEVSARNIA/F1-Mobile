@@ -6,6 +6,7 @@ var cars: Array = []
 var player: Node
 
 var _raw := PackedVector2Array()
+var _drs: Array = []  # polylines of each DRS zone
 
 
 func setup(p_track: Node, p_cars: Array, p_player: Node) -> void:
@@ -17,6 +18,15 @@ func setup(p_track: Node, p_cars: Array, p_player: Node) -> void:
 		var p: Vector3 = track.points[i]
 		_raw.append(Vector2(p.x, p.z))
 	_raw.append(_raw[0])
+	for z: Dictionary in track.drs_zones:
+		var line := PackedVector2Array()
+		var s: float = z.start
+		var e: float = z.end
+		var span := fposmod(e - s, track.length)
+		for k in 25:
+			var p: Vector3 = track.point_at(s + span * k / 24.0)
+			line.append(Vector2(p.x, p.z))
+		_drs.append(line)
 
 
 func _process(_dt: float) -> void:
@@ -33,6 +43,8 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.35))
 	draw_polyline(poly, Color(0, 0, 0, 0.8), 6.0, true)
 	draw_polyline(poly, Color(0.9, 0.9, 0.9), 3.0, true)
+	for line: PackedVector2Array in _drs:
+		draw_polyline(xf * line, Color(0.2, 0.95, 0.4), 3.0, true)
 	draw_circle(poly[0], 4.0, Color.WHITE)
 	for c in cars:
 		if c == player:
