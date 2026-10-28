@@ -617,7 +617,7 @@ func _build_pit() -> void:
 		mb.size = Vector3(3.0, 0.02, 6.0)
 		mark.mesh = mb
 		mark.material_override = team_mat
-		mark.transform = Transform3D(basis, point_at(pit_in + d, pit_lateral(d) + pit_side * 1.8) + Vector3(0, _road_y(i) + 0.012, 0))
+		mark.transform = Transform3D(basis, point_at(pit_in + d, pit_lateral(d) + pit_side * 2.2) + Vector3(0, _road_y(i) + 0.012, 0))
 		add_child(mark)
 
 

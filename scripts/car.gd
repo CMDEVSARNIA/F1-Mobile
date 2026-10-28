@@ -729,15 +729,15 @@ func _pit_drive(dt: float) -> void:
 		if _stuck_time > 2.0:
 			_stuck_time = 0.0
 			var s := lap_pos + 4.0
-			var p := track.point_at(s, track.pit_lateral(d + 4.0))
-			var ahead := track.point_at(s + 3.0, track.pit_lateral(d + 7.0))
+			var p := track.point_at(s, _pit_line(d + 4.0))
+			var ahead := track.point_at(s + 3.0, _pit_line(d + 7.0))
 			global_transform = Transform3D(Basis.IDENTITY, p).looking_at(ahead, Vector3.UP)
 			velocity = Vector3.ZERO
 			_r = 0.0
 	else:
 		_stuck_time = 0.0
 	var look := clampf(absf(speed) * 0.4, 6.0, 20.0)
-	var aim := track.point_at(lap_pos + look, track.pit_lateral(d + look))
+	var aim := track.point_at(lap_pos + look, _pit_line(d + look))
 	var local := global_transform.affine_inverse() * aim
 	steer = clampf(atan2(local.x, -local.z) * 3.0, -1.0, 1.0)
 	# Brake down to the limiter before it starts, then hold it.
@@ -776,6 +776,21 @@ func _pit_drive(dt: float) -> void:
 	else:
 		throttle = 0.25
 		brake = 0.0
+
+
+## Where in the lane to drive: the fast lane by the pit wall, pulling over
+## into our own box for the stop so cars behind can pass.
+func _pit_line(d: float) -> float:
+	var base := track.pit_lateral(d)
+	var full := clampf((d - track.pit_ramp) / 20.0, 0.0, 1.0) \
+			* clampf((track.pit_len - track.pit_ramp - d) / 20.0, 0.0, 1.0)
+	var box := track.pit_box(team)
+	var into := 0.0
+	if _pit_state < 2:
+		into = clampf(1.0 - (box - d - 3.0) / 15.0, 0.0, 1.0)
+	else:
+		into = clampf(1.0 - (d - box) / 15.0, 0.0, 1.0)
+	return base + track.pit_side * full * lerpf(-1.6, 2.2, into)
 
 
 ## AI: pit when the tyres won't make the flag, onto the softest compound
