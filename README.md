@@ -10,7 +10,9 @@ code and data, so the project runs with no third-party art.
 | Feature | Where |
 | --- | --- |
 | 20 real circuits in calendar order (Albert Park to Yas Marina, plus Sepang, Hockenheim, Nurburgring, Sochi) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
-| Track generation: asphalt, edge lines, kerbs on corners, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
+| Track generation: asphalt with a rubbered-in racing line, edge lines, kerbs on corners, gravel traps on the outside of slow corners, mown-grass verges, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
+| Elevation: hand-built height profiles for Spa (Eau Rouge/Raidillon, ~90 m), Suzuka (with a real bridge at the crossover), Red Bull Ring, COTA's Turn 1 climb, Interlagos, Zandvoort (19° and 17° banking), Hungaroring, Catalunya and the Nürburgring; gentle undulation elsewhere. Rolling terrain follows the circuit | `scripts/track_profiles.gd`, `scripts/track.gd` |
+| Hills in the physics: gravity on gradients (slower uphill, longer braking downhill), more grip in compressions and less over crests, banking that holds the car in; the AI speed plan knows all of it | `scripts/car.gd`, `scripts/track.gd` |
 | Handling: **Realistic** (default) planar vehicle dynamics: slip angles into a Pacejka-style tyre curve, 46/54 weight distribution with load transfer, speed-squared downforce, 600 kW rear-wheel drive, friction circle (wheelspin, lock-ups, power oversteer), speed-sensitive steering with a slip-angle limiter, traction control / stability control (Off/Low/High) and ABS, visible pitch and roll. **Arcade** model kept as an option and for the AI | `scripts/car.gd` |
 | AI drivers: speed plan from track curvature with a braking pass, lookahead steering, simple overtaking, stuck recovery | `scripts/car.gd`, `scripts/track.gd` |
 | Clean low-poly modern F1 car modelled in code: lofted nose and sidepods, halo, multi-element wings, DRS flap, compound-coloured tyres, two-tone team liveries | `scripts/lowpoly_car.gd`, `scripts/car_model.gd` |
@@ -21,8 +23,9 @@ code and data, so the project runs with no third-party art.
 | Mobile controls modelled on GRID Autosport / Real Racing: arrow buttons, drag-to-steer wheel or tilt; pedal-shaped brake/gas; auto-throttle by default (manual "Pro" option); braking assist; haptic taps | `scripts/touch_controls.gd` |
 | Controls & assists screen (main menu and pause): steering style, sensitivity, tilt direction + auto/manual tilt calibration, steering assist with edge protection, braking assist levels, auto/manual throttle, button size and opacity, mirrored layout, vibration | `scripts/ui/controls_panel.gd`, `scripts/car.gd` |
 | HUD: position, lap, lap/last/best times, minimap, round icon buttons, F1-style driver display with shift lights, gear, speed and pedal bars | `scripts/hud.gd`, `scripts/ui/` |
-| Sound: engine loop pitched by RPM, tyre squeal, wall impacts; AI cars are positional so you hear them pass | `scripts/car_audio.gd` |
-| Cameras: chase, far chase, cockpit (CAM button / `C`) | `scripts/chase_camera.gd` |
+| Sound: engine loop pitched by RPM, tyre squeal, light and heavy impacts, gravel rattle, stall on reset, trackside crowd, wrong-way and lost-position cues; AI cars are positional so you hear them pass | `scripts/car_audio.gd`, `scripts/race.gd` |
+| Cameras: chase, far chase, cockpit that pitches and rolls with the car (CAM button / `C`) | `scripts/chase_camera.gd` |
+| Branding: Formula Force logo in the menu, splash screen and launcher icon | `assets/ui/` |
 
 ## Running it
 
@@ -58,8 +61,10 @@ Even quicker: plug the phone in with USB debugging enabled and press the
   `<name>.csv.import` file with the same contents as the existing ones (it stops
   Godot from treating the CSV as a translation table), then add an entry to `TRACKS`
   in `scripts/game_state.gd`. Monaco isn't in that database.
-- **Elevation:** the source data is 2D, so tracks are flat. Eau Rouge has the
-  right shape but no climb yet.
+- **Elevation:** the source data is 2D, so heights are hand-made approximations
+  in `scripts/track_profiles.gd`: `[lap fraction, metres]` keyframes per circuit,
+  plus optional banking ranges. Tweak a profile and the road, terrain, bridges,
+  physics and AI all follow.
 
 ## Tuning knobs
 
@@ -77,4 +82,7 @@ Even quicker: plug the phone in with USB debugging enabled and press the
 - Track centerlines: TUM racetrack-database, **LGPL-3.0** (`tracks/LICENSE-LGPL-3.0.txt`).
 - Menu music: your own track (made with Suno), converted to OGG in `assets/music/`.
 - Forest/tent models and engine/skid/impact sounds: Kenney Starter Kit Racing, **CC0** (`assets/kenney/LICENSE.md`).
+- Gravel, crash, stall, crowd and cue sounds: Free Racing and Driving Sounds by moneywithjjcom, royalty-free (`assets/sfx/LICENSE.md`).
+- Logo: your own artwork (`assets/ui/`).
+- Car models in `assets/cars/local/` are third-party and deliberately not in the repo.
 - No team names, logos or liveries are included. Drivers and colours are fictional.

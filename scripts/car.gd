@@ -40,7 +40,13 @@ var brake := 0.0
 var speed := 0.0  # forward m/s
 var gear := 1
 var rpm := 4000.0
-var on_grass := false
+var on_grass := false  # off the track: grass or gravel
+var on_gravel := false
+# Ground under the car, refreshed every physics tick.
+var grade := 0.0  # rise per metre in the direction the car points
+var bank := 0.0  # rise per metre toward the car's right
+var load_factor := 1.0  # >1 in compressions, <1 over crests
+const GRAVEL_GRIP := 0.4
 var wrong_way := false
 var skid := 0.0  # 0..1, drives the tyre-squeal sound
 var _impact_cooldown := 0.0
@@ -148,6 +154,7 @@ signal pit_event(car, what: String)
 signal lap_completed(car, lap_time: float)
 signal crossed_finish(car)
 signal impact(strength: float)
+signal reset
 
 var model: Node3D
 
@@ -326,7 +333,7 @@ func _integrate(dt: float) -> void:
 	var v_long := velocity.dot(fwd)
 	var v_lat := velocity.dot(right)
 	var tg := tyre_grip()
-	var grip_mul := (0.5 if on_grass else 1.0) * tg
+	var grip_mul := (GRAVEL_GRIP if on_gravel else 0.5 if on_grass else 1.0) * tg * load_factor
 	if tyre_wear_enabled and controls_enabled:
 		var c: Dictionary = COMPOUNDS[compound]
 		var rate: float = 1.0 / (c.life * race_laps * track.length)
@@ -355,9 +362,13 @@ func _integrate(dt: float) -> void:
 	tow = _compute_tow()
 	var aero := 0.0004 * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
 	var drag := 0.25 + aero * v_long * v_long
-	if on_grass:
+	if on_gravel:
+		# Stones bleed speed fast, but a slow car can still crawl out.
+		drag += 0.012 * v_long * v_long + 4.5 * clampf(absf(v_long) / 15.0, 0.15, 1.0)
+	elif on_grass:
 		drag += 0.004 * v_long * v_long + 2.0
 	accel -= signf(v_long) * drag
+	accel -= 9.81 * grade / sqrt(1.0 + grade * grade)  # hills
 	var new_v := v_long + accel * dt
 	if signf(new_v) != signf(v_long) and absf(v_long) > 0.01 and throttle < 0.01 and brake < 0.01:
 		new_v = 0.0
@@ -368,6 +379,10 @@ func _integrate(dt: float) -> void:
 	var max_angle := lerpf(0.42, 0.05, clampf(vabs / 75.0, 0.0, 1.0))
 	var yaw_rate := -v_long * tan(steer * max_angle) / WHEELBASE
 	var yaw_cap := grip_accel(vabs) * grip_mul / maxf(vabs, 0.5)
+	# Banking holds the car in when it turns toward the low side.
+	if absf(bank) > 0.01:
+		var helps := bank * yaw_rate > 0.0
+		yaw_cap = maxf(yaw_cap + (9.81 if helps else -4.9) * absf(bank) / maxf(vabs, 0.5), 0.0)
 	# Tyres squeal when asked for more than the grip gives, or under hard braking.
 	var over := absf(yaw_rate) / yaw_cap - 1.0
 	var target_skid := clampf(over * 2.0, 0.0, 1.0) if vabs > 12.0 and not on_grass else 0.0
@@ -381,6 +396,7 @@ func _integrate(dt: float) -> void:
 	fwd = -basis.z
 	right = basis.x
 	v_lat *= exp(-dt * 10.0 * grip_mul)
+	v_lat -= 9.81 * bank * dt * 0.3  # slide down a banked slope when slow
 	velocity = fwd * v_long + right * v_lat
 	velocity.y = 0.0
 	move_and_slide()
@@ -394,7 +410,6 @@ func _integrate(dt: float) -> void:
 			impact.emit(strength)
 			_impact_cooldown = 0.4
 		velocity *= 1.0 - 0.5 * hit * dt * 10.0
-	global_position.y = 0.0
 	speed = velocity.dot(-global_transform.basis.z)
 	_update_gear()
 
@@ -433,7 +448,6 @@ func _integrate_realistic(dt: float, tg: float) -> void:
 			_impact_cooldown = 0.4
 		velocity *= 1.0 - 0.5 * hit * dt * 10.0
 		_r *= 1.0 - 0.6 * dt * 10.0  # walls kill rotation
-	global_position.y = 0.0
 	speed = velocity.dot(-global_transform.basis.z)
 	_update_gear()
 
@@ -442,11 +456,12 @@ func _integrate_realistic(dt: float, tg: float) -> void:
 func _realistic_step(h: float, tg: float) -> Vector3:
 	var L := R_A + R_B
 	var v := absf(_vx)
-	var grip := R_MU * tg * (0.5 if on_grass else 1.0)
+	var grip := R_MU * tg * (GRAVEL_GRIP if on_gravel else 0.5 if on_grass else 1.0)
 	var down := 0.5 * R_RHO * R_CLA * _vx * _vx
 	var transfer := R_MASS * _ax * R_H / L  # braking (ax < 0) loads the front
-	var fz_f := maxf(R_MASS * 9.81 * R_B / L + down * 0.45 - transfer, 200.0)
-	var fz_r := maxf(R_MASS * 9.81 * R_A / L + down * 0.55 + transfer, 200.0)
+	# Compressions press the tyres into the road, crests unload them.
+	var fz_f := maxf((R_MASS * 9.81 * R_B / L + down * 0.45) * load_factor - transfer, 200.0)
+	var fz_r := maxf((R_MASS * 9.81 * R_A / L + down * 0.55) * load_factor + transfer, 200.0)
 	var cap_f := grip * fz_f
 	var cap_r := grip * fz_r * TIRE_REAR_GRIP
 
@@ -511,13 +526,18 @@ func _realistic_step(h: float, tg: float) -> Vector3:
 	# Resistances: aero drag (cut by DRS and tow), rolling, grass
 	var aero := 0.5 * R_RHO * R_CDA * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
 	var resist := aero * _vx * absf(_vx) + 200.0 * signf(_vx)
-	if on_grass:
+	if on_gravel:
+		resist += R_MASS * (0.012 * _vx * absf(_vx) + 4.5 * clampf(_vx / 15.0, -1.0, 1.0))
+	elif on_grass:
 		resist += R_MASS * (0.004 * _vx * absf(_vx) + 2.0 * signf(_vx))
+	# Gravity along the slope, and across it on banking (y is to the left).
+	resist += R_MASS * 9.81 * grade / sqrt(1.0 + grade * grade)
+	var g_lat := R_MASS * 9.81 * bank / sqrt(1.0 + bank * bank)
 
 	var cd := cos(delta)
 	var sd := sin(delta)
 	var fx := fx_r + fx_f * cd - fy_f * sd - resist
-	var fy := fx_f * sd + fy_f * cd + fy_r
+	var fy := fx_f * sd + fy_f * cd + fy_r + g_lat
 	var mz := R_A * (fx_f * sd + fy_f * cd) - R_B * fy_r
 	var ax := fx / R_MASS + _vy * _r
 	var ay := fy / R_MASS - _vx * _r
@@ -558,7 +578,20 @@ func _update_body_motion(dt: float) -> void:
 	_body_pitch = lerpf(_body_pitch, clampf(ax / 9.81 * 0.012, -0.05, 0.05), clampf(dt * 8.0, 0.0, 1.0))
 	_body_roll = lerpf(_body_roll, clampf(-ay / 9.81 * 0.008, -0.05, 0.05), clampf(dt * 8.0, 0.0, 1.0))
 	if model:
-		model.rotation = Vector3(_body_pitch, 0.0, _body_roll)
+		# The body follows the road: nose up uphill, rolled on banking.
+		model.rotation = Vector3(_body_pitch + atan(grade), 0.0, _body_roll + atan(bank))
+
+
+## Sit the car on the road and read the slope, banking and vertical
+## curvature under it for the physics.
+func _follow_ground() -> void:
+	global_position.y = track.ground_height(lap_pos, lateral)
+	var heading := (-global_transform.basis.z).dot(track.tangents[track_idx])
+	var on_road := absf(lateral) <= track.half_width(track_idx, lateral) + Track.KERB_WIDTH
+	grade = track.slope_at(lap_pos) * heading
+	bank = track.camber_at(lap_pos) * heading if on_road else 0.0
+	var v := absf(speed)
+	load_factor = clampf(1.0 + v * v * track.vcurv_at(lap_pos) / 9.81, 0.4, 2.0)
 
 
 func _update_gear() -> void:
@@ -590,7 +623,10 @@ func _update_track_state() -> void:
 	_update_pit(prev_pos)
 	_update_drs(prev_pos)
 	var hw := track.half_width(track_idx, lateral)
-	on_grass = absf(lateral) > hw + Track.KERB_WIDTH * 0.8 and not track.on_pit_surface(lap_pos, lateral)
+	var surface := track.surface_at(track_idx, lateral)
+	on_grass = surface != 0 and not track.on_pit_surface(lap_pos, lateral)
+	on_gravel = on_grass and surface == 2
+	_follow_ground()
 	if on_grass and lap >= 1:
 		lap_valid = false
 	wrong_way = absf(speed) > 5.0 and (-global_transform.basis.z).dot(track.tangents[track_idx]) < -0.3
@@ -709,6 +745,9 @@ func _pit_drive(dt: float) -> void:
 	var v_target := sqrt(Track.PIT_SPEED * Track.PIT_SPEED + 2.0 * 14.0 * maxf(limiter_start - d, 0.0))
 	if track.in_pit_limiter(d):
 		v_target = Track.PIT_SPEED
+	elif d < track.pit_ramp:
+		# The entry can start inside one of the circuit's corners (Spa's Bus Stop).
+		v_target = minf(v_target, _target_speed_ahead())
 	if _pit_state < 2:
 		var to_box := track.pit_box(team) - d
 		v_target = minf(v_target, sqrt(2.0 * 5.0 * maxf(to_box, 0.0)) + 0.3)
@@ -793,6 +832,7 @@ func _on_cross_line() -> void:
 
 
 func reset_to_track() -> void:
+	reset.emit()
 	_stuck_time = 0.0
 	if in_pit:
 		in_pit = false

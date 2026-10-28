@@ -3,6 +3,7 @@ extends Control
 ## season calendar on the left, mode settings and start on the right.
 ## Built in code, sized for thumbs.
 
+const LOGO := preload("res://assets/ui/logo.png")
 const MODES := [["race", "QUICK RACE"], ["season", "SEASON"], ["time_trial", "TIME TRIAL"]]
 const TYRES := ["Soft", "Medium", "Hard"]
 const SEASON_NAMES := {"short": "Short (5 rounds)", "medium": "Medium (10 rounds)", "full": "Full (16 rounds)"}
@@ -19,14 +20,17 @@ var _confirm_reset := false
 func _ready() -> void:
 	theme = GameState.make_theme()
 	var bg := ColorRect.new()
-	bg.color = Color(0.07, 0.07, 0.1)
+	bg.color = GameState.BRAND_BG
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
-	var stripe := ColorRect.new()
-	stripe.color = Color(0.88, 0.02, 0.0)
-	stripe.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	stripe.offset_bottom = 8
-	add_child(stripe)
+	# Red over gold pinstripes, as across the top of the logo.
+	for spec in [[GameState.BRAND_RED, 0, 5], [GameState.BRAND_GOLD, 7, 10]]:
+		var stripe := ColorRect.new()
+		stripe.color = spec[0]
+		stripe.set_anchors_preset(Control.PRESET_TOP_WIDE)
+		stripe.offset_top = spec[1]
+		stripe.offset_bottom = spec[2]
+		add_child(stripe)
 
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -41,12 +45,18 @@ func _ready() -> void:
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 10)
 	page.add_child(header)
-	var title := _label(header, "FORMULA FORCE", 48)
+	var title := TextureRect.new()
+	title.texture = LOGO
+	title.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	title.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
+	title.custom_minimum_size = Vector2(0, 92)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
 	for m in MODES:
 		var t := _button(header, m[1], _set_mode.bind(m[0]))
 		t.toggle_mode = true
 		t.custom_minimum_size = Vector2(190, 58)
+		t.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		t.add_theme_font_size_override("font_size", 21)
 		_tabs.append(t)
 
@@ -181,7 +191,7 @@ func _build_season() -> void:
 			var st := GameState.season_standings()
 			var you := _you_position(st)
 			_info_panel(_right, [
-				["CHAMPION  " + st[0][0], 28, Color(1.0, 0.85, 0.2)],
+				["CHAMPION  " + st[0][0], 28, GameState.BRAND_GOLD],
 				["You finished P%d with %d points" % [you + 1, st[you][1]], 20, Color.WHITE],
 			])
 		_button(_right, "Length: " + SEASON_NAMES[_season_length], _cycle_season_length)
@@ -198,9 +208,9 @@ func _build_season() -> void:
 	var st := GameState.season_standings()
 	var you := _you_position(st)
 	for i in mini(5, st.size()):
-		rows.append(["%d.  %-10s  %d" % [i + 1, st[i][0], st[i][1]], 20, Color(1, 0.85, 0.2) if i == you else Color.WHITE])
+		rows.append(["%d.  %-10s  %d" % [i + 1, st[i][0], st[i][1]], 20, GameState.BRAND_GOLD if i == you else Color.WHITE])
 	if you >= 5:
-		rows.append(["%d.  %-10s  %d" % [you + 1, st[you][0], st[you][1]], 20, Color(1, 0.85, 0.2)])
+		rows.append(["%d.  %-10s  %d" % [you + 1, st[you][0], st[you][1]], 20, GameState.BRAND_GOLD])
 	_info_panel(_right, rows)
 	_button(_right, "Laps: %d   ·   Tyres: %s" % [GameState.settings.laps, TYRES[GameState.settings.start_compound]],
 			_cycle_setting.bind("start_compound", [0, 1, 2]))
@@ -272,7 +282,7 @@ func _label(parent: Control, text: String, size: int) -> Label:
 
 
 func _heading(parent: Control, text: String) -> void:
-	_label(parent, text, 20).add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	_label(parent, text, 20).add_theme_color_override("font_color", GameState.BRAND_GOLD)
 
 
 func _hint(parent: Control, text: String) -> void:
@@ -320,7 +330,7 @@ func _controls_button() -> void:
 func _info_panel(parent: Control, lines: Array) -> void:
 	var p := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.11, 0.11, 0.15)
+	sb.bg_color = Color(0.1, 0.095, 0.1)
 	sb.set_corner_radius_all(12)
 	sb.set_content_margin_all(16)
 	p.add_theme_stylebox_override("panel", sb)

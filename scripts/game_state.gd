@@ -245,13 +245,22 @@ func _load() -> void:
 			best_laps[key] = cfg.get_value("best_laps", key)
 
 
-## Shared look for menus and HUD panels: dark glassy buttons, red accent.
+# Brand palette, taken from the Formula Force logo.
+const BRAND_RED := Color(0.89, 0.13, 0.08)
+const BRAND_ORANGE := Color(1.0, 0.43, 0.02)
+const BRAND_GOLD := Color(1.0, 0.73, 0.12)
+const BRAND_CHROME := Color(0.88, 0.9, 0.94)
+const BRAND_BG := Color(0.045, 0.045, 0.055)
+
+
+## Shared look for menus and HUD panels: dark glassy buttons, logo accents
+## (orange for actions and selection, gold for highlights).
 static func make_theme() -> Theme:
 	var t := Theme.new()
 	t.default_font_size = 24
-	var normal := _box(Color(0.12, 0.12, 0.16, 0.92), Color(1, 1, 1, 0.08), 2)
-	var hover := _box(Color(0.17, 0.17, 0.22, 0.95), Color(1, 1, 1, 0.18), 2)
-	var pressed := _box(Color(0.22, 0.05, 0.05, 0.95), Color(0.88, 0.02, 0.0), 2)
+	var normal := _box(Color(0.125, 0.12, 0.125, 0.94), Color(1, 1, 1, 0.08), 2)
+	var hover := _box(Color(0.18, 0.17, 0.17, 0.95), Color(1, 0.73, 0.12, 0.35), 2)
+	var pressed := _box(Color(0.25, 0.08, 0.02, 0.95), BRAND_ORANGE, 2)
 	pressed.border_width_left = 8
 	for st in [normal, hover, pressed]:
 		st.content_margin_left = 22
@@ -261,22 +270,23 @@ static func make_theme() -> Theme:
 	t.set_stylebox("pressed", "Button", pressed)
 	t.set_stylebox("hover_pressed", "Button", pressed)
 	t.set_stylebox("focus", "Button", StyleBoxEmpty.new())
-	t.set_color("font_color", "Button", Color(0.92, 0.92, 0.95))
+	t.set_color("font_color", "Button", BRAND_CHROME)
 	t.set_color("font_pressed_color", "Button", Color.WHITE)
 	t.set_color("font_hover_color", "Button", Color.WHITE)
 	t.set_color("font_hover_pressed_color", "Button", Color.WHITE)
-	var panel := _box(Color(0.05, 0.05, 0.08, 0.94), Color(0.88, 0.02, 0.0), 0)
+	var panel := _box(Color(BRAND_BG, 0.95), BRAND_ORANGE, 0)
 	panel.border_width_top = 6
 	panel.set_content_margin_all(28)
 	t.set_stylebox("panel", "PanelContainer", panel)
 	return t
 
 
-## Big red call-to-action button style (START RACE, RACE AGAIN).
+## Big orange call-to-action button with a gold edge, like the logo's
+## FORCE lettering (START RACE, RACE AGAIN).
 static func style_primary(b: Button) -> void:
-	b.add_theme_stylebox_override("normal", _box(Color(0.88, 0.02, 0.0), Color(1, 1, 1, 0.15), 2))
-	b.add_theme_stylebox_override("hover", _box(Color(1.0, 0.18, 0.12), Color(1, 1, 1, 0.3), 2))
-	b.add_theme_stylebox_override("pressed", _box(Color(0.7, 0.0, 0.0), Color(1, 1, 1, 0.3), 2))
+	b.add_theme_stylebox_override("normal", _box(Color(0.93, 0.33, 0.0), BRAND_GOLD, 2))
+	b.add_theme_stylebox_override("hover", _box(BRAND_ORANGE, BRAND_GOLD.lightened(0.3), 2))
+	b.add_theme_stylebox_override("pressed", _box(Color(0.72, 0.2, 0.0), BRAND_GOLD, 2))
 
 
 static func _box(bg: Color, border: Color, bw: int) -> StyleBoxFlat:

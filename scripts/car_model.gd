@@ -7,6 +7,7 @@ extends Node3D
 ## automatically: longest side laid along the track, scaled to F1 length,
 ## centred and put on the ground.
 const CUSTOM_MODELS := [
+	"res://assets/cars/local/car.fbx", "res://assets/cars/local/car.glb",
 	"res://assets/cars/car.glb", "res://assets/cars/car.gltf",
 	"res://assets/cars/car.fbx", "res://assets/cars/car.obj",
 ]
@@ -16,12 +17,52 @@ const CUSTOM_YAW_DEG := 0.0
 ## Materials whose names contain one of these get the team colour.
 const PAINT_HINTS := ["body", "paint", "livery", "chassis", "main"]
 const LowpolyCar = preload("res://scripts/lowpoly_car.gd")
+## Nodes named like this are wheels (spun and steered); front ones are the
+## pair furthest forward.
+const WHEEL_NAME := "^(wheel|tyre|tire)[_.\\-]?\\d*$"
+## Node that opens for DRS (rear-wing top element).
+const FLAP_NAMES := ["drs", "flap", "spoiler_002"]
+## Texture-atlas models (one shared material) are recoloured by this shader:
+## near-white paint becomes the team colour, the red stripes the accent.
+const LIVERY_SHADER := """
+shader_type spatial;
+render_mode cull_disabled;
+uniform sampler2D atlas : filter_linear_mipmap, repeat_enable;
+uniform vec3 paint = vec3(1.0, 0.0, 0.0);
+uniform vec3 accent = vec3(1.0);
+uniform bool repaint = true;
+void fragment() {
+	vec3 c = texture(atlas, UV).rgb;  // sRGB, compared as authored
+	float mx = max(c.r, max(c.g, c.b));
+	float sat = (mx - min(c.r, min(c.g, c.b))) / max(mx, 0.001);
+	vec3 o = c;
+	if (repaint) {
+		float white = smoothstep(0.62, 0.72, mx) * (1.0 - smoothstep(0.08, 0.16, sat));
+		float red = step(0.3, c.r) * step(c.g * 2.5, c.r) * step(c.b * 2.5, c.r);
+		o = mix(o, paint * clamp(mx / 0.8, 0.0, 1.1), white);
+		o = mix(o, accent * clamp(mx / 0.53, 0.0, 1.1), red);
+	}
+	ALBEDO = pow(o, vec3(2.2));
+	ROUGHNESS = 0.42;
+	METALLIC = 0.15;
+}
+"""
+static var _shader: Shader
+## Baked model per path: body mesh, wheels and flap, shared by every car.
+static var _baked := {}
 
 var team_color := Color.RED
 ## Height of the tallest part, used to place the on-board camera.
 var top_height := 1.06
 var accent_color := Color.WHITE
 var _lowpoly: Node3D
+var _wheels: Array = []  # [{node, base, center, front}]
+var _flap: Dictionary = {}  # {node, base, pivot}
+var _spin := 0.0
+var _steer_vis := 0.0
+var _drs_amt := 0.0
+var _drs_open := false
+var _wheel_radius := 0.36
 
 
 func _ready() -> void:
@@ -33,6 +74,140 @@ func _ready() -> void:
 
 
 func _load_custom(path: String) -> void:
+	if not _baked.has(path):
+		_baked[path] = _bake(path)
+	var bake: Dictionary = _baked[path]
+	if bake.is_empty():
+		_load_custom_plain(path)
+		return
+	var mat: Material = bake.mat0
+	if bake.atlas != null:
+		if _shader == null:
+			_shader = Shader.new()
+			_shader.code = LIVERY_SHADER
+		var sm := ShaderMaterial.new()
+		sm.shader = _shader
+		sm.set_shader_parameter("atlas", bake.atlas)
+		sm.set_shader_parameter("paint", Vector3(team_color.r, team_color.g, team_color.b))
+		sm.set_shader_parameter("accent", Vector3(accent_color.r, accent_color.g, accent_color.b))
+		mat = sm
+		if not bake.has("plain_mat"):
+			var plain: ShaderMaterial = sm.duplicate()
+			plain.set_shader_parameter("repaint", false)
+			bake["plain_mat"] = plain
+	var body := MeshInstance3D.new()
+	body.mesh = bake.body
+	body.material_override = mat
+	add_child(body)
+	for w: Dictionary in bake.wheels:
+		var mi := MeshInstance3D.new()
+		mi.mesh = w.mesh
+		mi.material_override = bake.get("plain_mat", mat)
+		mi.transform = w.base
+		add_child(mi)
+		_wheels.append({"node": mi, "base": w.base, "center": w.center, "front": w.front})
+	if not bake.flap.is_empty():
+		var mi := MeshInstance3D.new()
+		mi.mesh = bake.flap.mesh
+		mi.material_override = mat
+		mi.transform = bake.flap.base
+		add_child(mi)
+		_flap = {"node": mi, "base": bake.flap.base, "pivot": bake.flap.pivot}
+	top_height = bake.top
+	_wheel_radius = bake.radius
+
+
+## Loads a model once, fits it (longest side along Z, F1 length, on the
+## ground) and bakes everything that doesn't move into a single mesh.
+## Returns {} when the model has no recognisable wheels.
+static func _bake(path: String) -> Dictionary:
+	var res := load(path)
+	if not res is PackedScene:
+		return {}
+	var root := Node3D.new()
+	var inst: Node3D = res.instantiate()
+	root.add_child(inst)
+	var re := RegEx.create_from_string("(?i)" + WHEEL_NAME)
+	var parts: Array[MeshInstance3D] = []
+	var wheel_parts: Array[MeshInstance3D] = []
+	var flap_part: MeshInstance3D = null
+	for mi: MeshInstance3D in inst.find_children("*", "MeshInstance3D", true, false):
+		if mi.mesh == null:
+			continue
+		var nm := String(mi.name).to_lower()
+		if re.search(nm):
+			wheel_parts.append(mi)
+		elif flap_part == null and FLAP_NAMES.any(func(h: String) -> bool: return h in nm):
+			flap_part = mi
+		else:
+			parts.append(mi)
+	if wheel_parts.size() < 4:
+		root.free()
+		return {}
+	# Transforms relative to `root`, computed by hand (nothing is in the tree).
+	var rel := func(n: Node3D) -> Transform3D:
+		var t := Transform3D.IDENTITY
+		var cur: Node = n
+		while cur != root:
+			t = (cur as Node3D).transform * t
+			cur = cur.get_parent()
+		return t
+	var all: Array[MeshInstance3D] = parts + wheel_parts
+	if flap_part:
+		all.append(flap_part)
+	var box := AABB()
+	for k in all.size():
+		var b: AABB = rel.call(all[k]) * all[k].get_aabb()
+		box = b if k == 0 else box.merge(b)
+	var fit := Transform3D.IDENTITY
+	if box.size.x > box.size.z:
+		fit = Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3.ZERO)
+	fit = Transform3D(Basis(Vector3.UP, deg_to_rad(CUSTOM_YAW_DEG)), Vector3.ZERO) * fit
+	box = fit * box
+	var s := TARGET_LENGTH / maxf(box.size.z, 0.001)
+	var c := box.get_center()
+	fit = Transform3D(Basis().scaled(Vector3.ONE * s), -Vector3(c.x, box.position.y, c.z) * s) * fit
+	var atlas: Texture2D = null
+	var mat0: Material = null
+	var st := SurfaceTool.new()
+	for mi in parts:
+		var t: Transform3D = fit * rel.call(mi)
+		for i in mi.mesh.get_surface_count():
+			st.append_from(mi.mesh, i, t)
+			var m := mi.get_active_material(i)
+			if mat0 == null:
+				mat0 = m
+			if atlas == null and m is BaseMaterial3D and (m as BaseMaterial3D).albedo_texture:
+				atlas = (m as BaseMaterial3D).albedo_texture
+	var out := {"body": st.commit(), "atlas": atlas, "mat0": mat0, "wheels": [], "flap": {},
+			"top": box.size.y * s}
+	var zs: Array[float] = []
+	for mi in wheel_parts:
+		var t: Transform3D = fit * rel.call(mi)
+		zs.append((t * mi.get_aabb().get_center()).z)
+	var sorted_z := zs.duplicate()
+	sorted_z.sort()
+	var front_limit: float = (sorted_z[1] + sorted_z[2]) / 2.0
+	var radius := 0.0
+	for k in wheel_parts.size():
+		var mi := wheel_parts[k]
+		var t: Transform3D = fit * rel.call(mi)
+		var wb := t * mi.get_aabb()
+		radius = maxf(radius, wb.size.y / 2.0)
+		out.wheels.append({"mesh": mi.mesh, "base": t, "center": wb.get_center(), "front": zs[k] < front_limit})
+	out["radius"] = radius
+	if flap_part:
+		var t: Transform3D = fit * rel.call(flap_part)
+		var fb := t * flap_part.get_aabb()
+		# Hinge on the leading edge, like a real DRS flap.
+		out.flap = {"mesh": flap_part.mesh, "base": t,
+				"pivot": Vector3(fb.get_center().x, fb.get_center().y, fb.position.z)}
+	root.free()
+	return out
+
+
+## Fallback for models without separate wheels: auto-fit and paint by name.
+func _load_custom_plain(path: String) -> void:
 	var res := load(path)
 	var inst: Node3D
 	if res is PackedScene:
@@ -96,10 +271,27 @@ func _paint(root: Node) -> void:
 func update_visual(steer: float, speed: float, dt: float) -> void:
 	if _lowpoly:
 		_lowpoly.update_wheels(steer, speed, dt)
+		return
+	if _wheels.is_empty():
+		return
+	_spin = fposmod(_spin - speed / _wheel_radius * dt, TAU)
+	_steer_vis = lerpf(_steer_vis, steer * 0.38, clampf(dt * 12.0, 0.0, 1.0))
+	for w: Dictionary in _wheels:
+		var ctr: Vector3 = w.center
+		var r := Basis(Vector3.RIGHT, _spin)
+		if w.front:
+			r = Basis(Vector3.UP, -_steer_vis) * r
+		w.node.transform = Transform3D(r, ctr - r * ctr) * w.base
+	if not _flap.is_empty():
+		_drs_amt = move_toward(_drs_amt, 1.0 if _drs_open else 0.0, dt * 5.0)
+		var pv: Vector3 = _flap.pivot
+		var fr := Basis(Vector3.RIGHT, -0.45 * _drs_amt)
+		_flap.node.transform = Transform3D(fr, pv - fr * pv) * _flap.base
 
 
-## DRS flap and tyre stripes only exist on the built-in car.
+## Tyre stripes only exist on the built-in car.
 func set_drs(open: bool) -> void:
+	_drs_open = open
 	if _lowpoly:
 		_lowpoly.set_drs(open)
 

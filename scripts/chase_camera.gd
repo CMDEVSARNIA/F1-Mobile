@@ -7,6 +7,7 @@ var target: Node3D
 var mode := Mode.CHASE
 
 var _initialized := false
+var _last_origin := Vector3.INF
 
 
 func _ready() -> void:
@@ -33,7 +34,9 @@ func _physics_process(dt: float) -> void:
 			# Sits just above the car's tallest part so any model stays out of view.
 			var model = target.get("model")
 			var top: float = model.top_height if model else 1.06
-			global_transform = Transform3D(t.basis, t * Vector3(0, top + 0.18, 0.4))
+			# Ride with the body so hills and banking are felt from the seat.
+			var mt: Transform3D = model.global_transform if model else t
+			global_transform = Transform3D(mt.basis.orthonormalized(), mt * Vector3(0, top + 0.18, 0.4))
 			rotate_object_local(Vector3.RIGHT, deg_to_rad(-6.0))
 		_:
 			var dist := 6.5 if mode == Mode.CHASE else 11.0
@@ -45,7 +48,9 @@ func _physics_process(dt: float) -> void:
 			# Stiff follow so the car stays framed at 300 km/h.
 			# Follow rigidly along the car's motion, smooth only the rest, so
 			# the car doesn't shrink into the distance at 300 km/h.
-			var vel: Vector3 = target.get("velocity") if target.get("velocity") != null else Vector3.ZERO
-			global_position += vel * dt
+			# Ride along with the car's actual movement, including climbs.
+			if _last_origin != Vector3.INF:
+				global_position += t.origin - _last_origin
 			global_position = global_position.lerp(desired, clampf(dt * 8.0, 0.0, 1.0))
 			look_at(t.origin + fwd * 4.0 + Vector3.UP * 0.9, Vector3.UP)
+	_last_origin = t.origin

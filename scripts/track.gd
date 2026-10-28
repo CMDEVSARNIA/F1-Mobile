@@ -16,6 +16,10 @@ const FOREST_MODEL := "res://assets/kenney/models/decoration-forest.glb"
 const TENTS_MODEL := "res://assets/kenney/models/decoration-tents.glb"
 const FOREST_SCALE := 3.0
 const PLAN_GRIP_MARGIN := 0.85
+const TrackProfiles = preload("res://scripts/track_profiles.gd")
+const BRIDGE_CLEARANCE := 7.5  # metres between road levels where the track crosses itself
+const TERRAIN_CELL := 30.0
+const CROWD_SOUND := preload("res://assets/sfx/crowd-trackside.ogg")
 
 var points := PackedVector3Array()
 var tangents := PackedVector3Array()
@@ -25,6 +29,17 @@ var width_right := PackedFloat32Array()
 var cum_dist := PackedFloat32Array()
 var curvature := PackedFloat32Array()  # signed, + = right-hand corner
 var target_speed := PackedFloat32Array()
+# Elevation (heights live in points[i].y)
+var camber := PackedFloat32Array()  # height change per metre to the right (banking)
+var slope := PackedFloat32Array()  # dh/ds along the lap
+var vcurv := PackedFloat32Array()  # d2h/ds2: + in compressions, - over crests
+var crossings: Array = []  # [upper index, lower index] where the track crosses itself
+var gravel := PackedByteArray()  # bit 1 = gravel on the right, bit 2 = on the left
+var flat_verge := PackedByteArray()  # same bits: verge stays level (bridges, pit side)
+var _terr_origin := Vector2.ZERO
+var _terr_nx := 0
+var _terr_nz := 0
+var _terr_h := PackedFloat32Array()
 var length := 0.0
 var bounds := Rect2()
 ## [{detect, start, end}] in metres along the lap, on the longest straights.
@@ -45,17 +60,21 @@ var pit_in := 0.0
 var pit_len := 0.0
 
 var _grid := {}
+var _crowds := 0
 
 
-func build(csv_path: String) -> bool:
-	if not _load_csv(csv_path):
+func build(info: Dictionary) -> bool:
+	if not _load_csv(info.file):
 		return false
 	_compute_frames()
+	_build_grid()
+	_compute_elevation(info.get("id", ""))
 	_compute_speed_profile()
 	_compute_drs_zones()
-	_build_grid()
 	_compute_pit()
+	_build_terrain()
 	_build_meshes()
+	_build_bridges()
 	_build_pit()
 	_build_gantry()
 	_build_boards()
@@ -122,6 +141,155 @@ func _compute_frames() -> void:
 		curvature[i] = 0.0 if denom < 0.001 else 2.0 * cross / denom
 
 
+# ---------------------------------------------------------------- elevation
+
+func _compute_elevation(id: String) -> void:
+	var n := points.size()
+	var prof: Dictionary = TrackProfiles.get_profile(id)
+	var h := PackedFloat32Array()
+	h.resize(n)
+	if prof.has("elev"):
+		var keys: Array = prof.elev
+		for i in n:
+			h[i] = _periodic_hermite(keys, cum_dist[i] / length)
+	else:
+		# Gentle undulation for the flatter circuits: a few smooth waves.
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash(id)
+		var amp: float = prof.get("amp", 3.0)
+		var waves := []
+		for k: int in [2, 3, 5, 7]:
+			waves.append([k, rng.randf() * TAU, rng.randf_range(0.4, 1.0) / k])
+		var norm := 0.0
+		for w in waves:
+			norm += w[2]
+		for i in n:
+			var f := cum_dist[i] / length
+			var v := 0.0
+			for w in waves:
+				v += sin(TAU * w[0] * f + w[1]) * w[2]
+			h[i] = amp * v / norm
+	h = _smooth(h, 9)
+	h = _smooth(h, 9)
+	_find_crossings(h)
+	# Bridges: lift the upper road where the track crosses over itself.
+	for c in crossings:
+		var up: int = c[0]
+		var lo: int = c[1]
+		var lift := BRIDGE_CLEARANCE - (h[up] - h[lo])
+		if lift <= 0.0:
+			continue
+		for i in n:
+			var ds := absf(cum_dist[i] - cum_dist[up])
+			ds = minf(ds, length - ds)
+			h[i] += lift * exp(-ds * ds / (2.0 * 150.0 * 150.0))
+	# Banking from the profile, eased in and out over each range.
+	camber.resize(n)
+	camber.fill(0.0)
+	for b in prof.get("bank", []):
+		var f0: float = b[0]
+		var f1: float = b[1]
+		var turn := 0.0
+		for i in n:
+			var f := cum_dist[i] / length
+			if f >= f0 and f <= f1:
+				turn += curvature[i]
+		for i in n:
+			var f := cum_dist[i] / length
+			if f < f0 or f > f1:
+				continue
+			var ease := clampf(minf(f - f0, f1 - f) / ((f1 - f0) * 0.25), 0.0, 1.0)
+			# The inside of the corner is lower.
+			camber[i] = -signf(turn) * tan(deg_to_rad(b[2] * ease))
+	camber = _smooth(camber, 4)
+	for i in n:
+		points[i].y = h[i]
+	# Gradient and vertical curvature for the physics.
+	slope.resize(n)
+	vcurv.resize(n)
+	for i in n:
+		var a := (i - 2 + n) % n
+		var b := (i + 2) % n
+		var ds := fposmod(cum_dist[b] - cum_dist[a], length)
+		slope[i] = (h[b] - h[a]) / maxf(ds, 0.1)
+	for i in n:
+		var a := (i - 2 + n) % n
+		var b := (i + 2) % n
+		var ds := fposmod(cum_dist[b] - cum_dist[a], length)
+		vcurv[i] = (slope[b] - slope[a]) / maxf(ds, 0.1)
+	vcurv = _smooth(vcurv, 4)
+
+
+## Cubic Hermite through periodic keyframes [[fraction, value], ...].
+func _periodic_hermite(keys: Array, f: float) -> float:
+	var m := keys.size()
+	var k := 0
+	while k < m - 1 and keys[k + 1][0] <= f:
+		k += 1
+	var get_key := func(idx: int) -> Vector2:
+		var w := floori(float(idx) / m)
+		var kk: Array = keys[posmod(idx, m)]
+		return Vector2(kk[0] + w, kk[1])
+	var p0: Vector2 = get_key.call(k - 1)
+	var p1: Vector2 = get_key.call(k)
+	var p2: Vector2 = get_key.call(k + 1)
+	var p3: Vector2 = get_key.call(k + 2)
+	if f < p1.x:
+		f += 1.0
+	var span := p2.x - p1.x
+	var t := clampf((f - p1.x) / span, 0.0, 1.0)
+	var m1 := (p2.y - p0.y) / (p2.x - p0.x) * span
+	var m2 := (p3.y - p1.y) / (p3.x - p1.x) * span
+	var t2 := t * t
+	var t3 := t2 * t
+	return (2 * t3 - 3 * t2 + 1) * p1.y + (t3 - 2 * t2 + t) * m1 + (-2 * t3 + 3 * t2) * p2.y + (t3 - t2) * m2
+
+
+## Periodic box blur of radius r (applied twice it is close to a Gaussian).
+func _smooth(a: PackedFloat32Array, r: int) -> PackedFloat32Array:
+	var n := a.size()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var acc := 0.0
+	for o in range(-r, r + 1):
+		acc += a[posmod(o, n)]
+	for i in n:
+		out[i] = acc / (2 * r + 1)
+		acc += a[posmod(i + r + 1, n)] - a[posmod(i - r, n)]
+	return out
+
+
+## Where the centreline crosses itself (Suzuka's figure-of-eight).
+func _find_crossings(h: PackedFloat32Array) -> void:
+	var n := points.size()
+	for i in n:
+		var a := Vector2(points[i].x, points[i].z)
+		var b := Vector2(points[(i + 1) % n].x, points[(i + 1) % n].z)
+		var c := _cell(points[i])
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var key := Vector2i(c.x + dx, c.y + dz)
+				if not _grid.has(key):
+					continue
+				for j in _grid[key]:
+					if j <= i:
+						continue
+					var gap := mini(j - i, n - (j - i))
+					if gap < 40:
+						continue
+					var p := Vector2(points[j].x, points[j].z)
+					var q := Vector2(points[(j + 1) % n].x, points[(j + 1) % n].z)
+					if Geometry2D.segment_intersects_segment(a, b, p, q) != null:
+						var dup := false
+						for e in crossings:
+							if mini(absi(e[0] - i), absi(e[1] - i)) < 20:
+								dup = true
+						if dup:
+							continue
+						var up: int = i if h[i] >= h[j] else j
+						crossings.append([up, j if up == i else i])
+
+
 func _compute_speed_profile() -> void:
 	var n := points.size()
 	target_speed.resize(n)
@@ -129,15 +297,23 @@ func _compute_speed_profile() -> void:
 		var r := 1.0 / maxf(absf(curvature[i]), 0.00001)
 		# v^2 = (GRIP_BASE + GRIP_AERO * v^2) * r, planned with a margin so
 		# the AI (and braking assist) can still steer through transitions.
+		# Banking adds grip; compressions add load, crests take it away.
 		var m := PLAN_GRIP_MARGIN
-		var denom := 1.0 - GRIP_AERO * m * r
-		target_speed[i] = 100.0 if denom <= 0.0 else minf(100.0, sqrt(GRIP_BASE * m * r / denom))
+		var v := 100.0
+		for it in 3:
+			var load := clampf(1.0 + v * v * vcurv[i] / 9.81, 0.5, 1.8)
+			var gb := GRIP_BASE * m * load + 9.81 * absf(camber[i])
+			var denom := 1.0 - GRIP_AERO * m * load * r
+			v = 100.0 if denom <= 0.0 else minf(100.0, sqrt(gb * r / denom))
+		target_speed[i] = v
 	# Backward pass so the AI brakes before corners. Two laps for wrap-around.
 	for pass_i in 2:
 		for j in range(n - 1, -1, -1):
 			var nxt := (j + 1) % n
 			var ds := points[j].distance_to(points[nxt])
-			var v_lim := sqrt(target_speed[nxt] * target_speed[nxt] + 2.0 * AI_PLAN_DECEL * ds)
+			# Braking uphill is shorter, downhill longer.
+			var decel := maxf(AI_PLAN_DECEL + 9.81 * slope[j], 8.0)
+			var v_lim := sqrt(target_speed[nxt] * target_speed[nxt] + 2.0 * decel * ds)
 			target_speed[j] = minf(target_speed[j], v_lim)
 
 
@@ -325,7 +501,7 @@ func on_pit_surface(s: float, lateral: float) -> bool:
 
 
 func _in_pit_complex(p: Vector3) -> bool:
-	var i := closest_index_global(p)
+	var i := closest_index_global(p, false)
 	var proj := project(p, i)
 	var d := pit_progress(proj.x)
 	return d > -60.0 and d < pit_len + 60.0 and signf(proj.y) == pit_side \
@@ -355,6 +531,14 @@ func _build_pit() -> void:
 		# Painted line on the garage side marks the fast lane
 		line_l.append(p + r * 0.8 + y + Vector3(0, 0.006, 0))
 		line_r.append(p + r * 1.0 + y + Vector3(0, 0.006, 0))
+	# Edges are built along rights * pit_side; keep the true left edge first.
+	if pit_side < 0:
+		var tmp := lane_l
+		lane_l = lane_r
+		lane_r = tmp
+		tmp = line_l
+		line_l = line_r
+		line_r = tmp
 	_add_mesh(_open_ribbon(lane_l, lane_r, Color.WHITE), asphalt)
 	_add_mesh(_open_ribbon(line_l, line_r, Color(0.95, 0.95, 0.95)), vc)
 
@@ -406,10 +590,10 @@ func _build_pit() -> void:
 		var out := rights[i] * pit_side
 		var g := MeshInstance3D.new()
 		var gb := BoxMesh.new()
-		gb.size = Vector3(14.0, 7.0, pit_box_spacing - 1.0)
+		gb.size = Vector3(14.0, 10.0, pit_box_spacing - 1.0)
 		g.mesh = gb
 		g.material_override = shell
-		g.transform = Transform3D(basis, front + out * 7.0 + Vector3(0, 3.5, 0))
+		g.transform = Transform3D(basis, front + out * 7.0 + Vector3(0, 2.0, 0))
 		add_child(g)
 		var door := MeshInstance3D.new()
 		var db := BoxMesh.new()
@@ -449,7 +633,7 @@ func _build_gantry() -> void:
 	var left := points[0] - r * (width_left[0] + 2.5) + y
 	var right := points[0] + r * (width_right[0] + 2.5) + y
 	for p: Vector3 in [left, right]:
-		_box(Vector3(0.7, 7.6, 0.7), p + Vector3(0, 3.8, 0), basis, grey)
+		_box(Vector3(0.7, 10.6, 0.7), p + Vector3(0, 2.3, 0), basis, grey)
 	var mid := (left + right) / 2.0
 	_box(Vector3(left.distance_to(right) + 0.7, 0.9, 0.9), mid + Vector3(0, 7.2, 0), basis, grey)
 	var housing := StandardMaterial3D.new()
@@ -524,7 +708,7 @@ func _open_ribbon(left: PackedVector3Array, right: PackedVector3Array, color: Co
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_color(color)
 	for k in left.size() - 1:
-		for v in [left[k], right[k], right[k + 1], left[k], right[k + 1], left[k + 1]]:
+		for v in [left[k], right[k + 1], right[k], left[k], left[k + 1], right[k + 1]]:
 			st.set_normal(Vector3.UP)
 			st.add_vertex(v)
 	return st.commit()
@@ -563,7 +747,9 @@ func closest_index_local(pos: Vector3, hint: int, window: int = 12) -> int:
 	return best
 
 
-func closest_index_global(pos: Vector3) -> int:
+## `use_height` prefers the branch at the car's level where the track
+## crosses itself.
+func closest_index_global(pos: Vector3, use_height := true) -> int:
 	var c := _cell(pos)
 	var best := -1
 	var best_d := INF
@@ -573,7 +759,8 @@ func closest_index_global(pos: Vector3) -> int:
 			if not _grid.has(key):
 				continue
 			for i in _grid[key]:
-				var dd := _flat_dist_sq(points[i], pos)
+				var dy := (points[i].y - pos.y) * 3.0 if use_height else 0.0
+				var dd := _flat_dist_sq(points[i], pos) + dy * dy
 				if dd < best_d:
 					best_d = dd
 					best = i
@@ -618,13 +805,82 @@ func point_at(s: float, lateral: float = 0.0) -> Vector3:
 		t = (s - cum_dist[i]) / (seg_end - cum_dist[i])
 	var p := points[i].lerp(points[j], t)
 	var r := rights[i].lerp(rights[j], t).normalized()
-	return p + r * lateral
+	var c := lerpf(camber[i], camber[j], t) if camber.size() == points.size() else 0.0
+	var lc := clampf(lateral, -width_left[i] - KERB_WIDTH, width_right[i] + KERB_WIDTH)
+	return p + r * lateral + Vector3(0, lc * c, 0)
 
 
 func transform_at(s: float, lateral: float = 0.0) -> Transform3D:
 	var p := point_at(s, lateral)
 	var ahead := point_at(s + 3.0, lateral)
+	ahead.y = p.y  # yaw only: cars stay level, the body follows the slope visually
 	return Transform3D(Basis.IDENTITY, p).looking_at(ahead, Vector3.UP)
+
+
+## Road surface height under lap distance `s`, `lateral` metres right.
+func height_at(s: float, lateral: float) -> float:
+	return point_at(s, lateral).y + _road_y(index_at_distance(s))
+
+
+func slope_at(s: float) -> float:
+	return _sample(slope, s)
+
+
+func vcurv_at(s: float) -> float:
+	return _sample(vcurv, s)
+
+
+func camber_at(s: float) -> float:
+	return _sample(camber, s)
+
+
+## Per-point value linearly interpolated at lap distance `s`.
+func _sample(a: PackedFloat32Array, s: float) -> float:
+	s = fposmod(s, length)
+	var i := index_at_distance(s)
+	var j := (i + 1) % points.size()
+	var seg_end := length if j == 0 else cum_dist[j]
+	var t := clampf((s - cum_dist[i]) / maxf(seg_end - cum_dist[i], 0.001), 0.0, 1.0)
+	return lerpf(a[i], a[j], t)
+
+
+## 0 = track or kerb, 1 = grass, 2 = gravel.
+func surface_at(i: int, lateral: float) -> int:
+	if absf(lateral) <= half_width(i, lateral) + KERB_WIDTH * 0.8:
+		return 0
+	var bit := 1 if lateral > 0.0 else 2
+	return 2 if gravel[i] & bit else 1
+
+
+## Point on the (possibly banked) road surface.
+func surf(i: int, lateral: float) -> Vector3:
+	var lc := clampf(lateral, -width_left[i] - KERB_WIDTH, width_right[i] + KERB_WIDTH)
+	return points[i] + rights[i] * lateral + Vector3(0, lc * camber[i] + _road_y(i), 0)
+
+
+## Ground point at `lateral`: the road (banked), then the verge sloping from
+## the kerb down to the surrounding terrain, then the terrain itself.
+func ground(i: int, lateral: float) -> Vector3:
+	var p := surf(i, lateral)
+	var w := (width_right[i] if lateral >= 0.0 else width_left[i]) + KERB_WIDTH
+	var out := absf(lateral) - w
+	if out <= 0.0 or _terr_h.is_empty():
+		return p
+	if flat_verge.size() == points.size() and flat_verge[i] & (1 if lateral >= 0.0 else 2):
+		return p
+	var t := clampf(out / (RUNOFF + 0.6), 0.0, 1.0)
+	var terr := terrain_height(p.x, p.z) + 0.12
+	p.y = lerpf(p.y, minf(p.y, terr), t * t * (3.0 - 2.0 * t))
+	return p
+
+
+## Height under a car at lap distance `s`, `lateral` metres right.
+func ground_height(s: float, lateral: float) -> float:
+	var i := index_at_distance(s)
+	var j := (i + 1) % points.size()
+	var seg_end := length if j == 0 else cum_dist[j]
+	var t := clampf((fposmod(s, length) - cum_dist[i]) / maxf(seg_end - cum_dist[i], 0.001), 0.0, 1.0)
+	return lerpf(ground(i, lateral).y, ground(j, lateral).y, t)
 
 
 func _flat_dist_sq(a: Vector3, b: Vector3) -> float:
@@ -661,9 +917,8 @@ func _build_meshes() -> void:
 	var road_l := PackedVector3Array()
 	var road_r := PackedVector3Array()
 	for i in n:
-		var y := Vector3(0, _road_y(i), 0)
-		road_l.append(points[i] - rights[i] * width_left[i] + y)
-		road_r.append(points[i] + rights[i] * width_right[i] + y)
+		road_l.append(surf(i, -width_left[i]))
+		road_r.append(surf(i, width_right[i]))
 
 	# Asphalt
 	var asphalt := StandardMaterial3D.new()
@@ -687,8 +942,8 @@ func _build_meshes() -> void:
 	var line_out_r := PackedVector3Array()
 	for i in n:
 		line_out_l.append(road_l[i] + lift)
-		line_in_l.append(road_l[i] + rights[i] * 0.35 + lift)
-		line_in_r.append(road_r[i] - rights[i] * 0.35 + lift)
+		line_in_l.append(surf(i, -width_left[i] + 0.35) + lift)
+		line_in_r.append(surf(i, width_right[i] - 0.35) + lift)
 		line_out_r.append(road_r[i] + lift)
 	_add_mesh(_ribbon(line_out_l, line_in_l, Color(0.95, 0.95, 0.95)), vc)
 	_add_mesh(_ribbon(line_in_r, line_out_r, Color(0.95, 0.95, 0.95)), vc)
@@ -711,12 +966,63 @@ func _build_meshes() -> void:
 	var kr_out := PackedVector3Array()
 	for i in n:
 		kl_in.append(road_l[i] + kerb_lift)
-		kl_out.append(road_l[i] - rights[i] * KERB_WIDTH + kerb_lift)
+		kl_out.append(surf(i, -width_left[i] - KERB_WIDTH) + kerb_lift)
 		kr_in.append(road_r[i] + kerb_lift)
-		kr_out.append(road_r[i] + rights[i] * KERB_WIDTH + kerb_lift)
+		kr_out.append(surf(i, width_right[i] + KERB_WIDTH) + kerb_lift)
 	var kerb_cols := [Color(0.8, 0.04, 0.04), Color(0.95, 0.95, 0.95)]
 	_add_mesh(_ribbon(kl_out, kl_in, Color.WHITE, grown, false, kerb_cols, 5), vc)
 	_add_mesh(_ribbon(kr_in, kr_out, Color.WHITE, grown, false, kerb_cols, 5), vc)
+
+	# Rubbered-in racing line: a darker band that swings to the inside of
+	# corners, like the grey line real circuits get over a weekend.
+	var rl := PackedFloat32Array()
+	rl.resize(n)
+	for i in n:
+		var hw := minf(width_left[i], width_right[i]) - 1.6
+		rl[i] = -signf(curvature[i]) * hw * clampf(absf(curvature[i]) * 140.0, 0.0, 1.0)
+	rl = _smooth(_smooth(rl, 6), 6)
+	var rub_l := PackedVector3Array()
+	var rub_r := PackedVector3Array()
+	for i in n:
+		rub_l.append(surf(i, rl[i] - 1.3) + Vector3(0, 0.003, 0))
+		rub_r.append(surf(i, rl[i] + 1.3) + Vector3(0, 0.003, 0))
+	var rubber := StandardMaterial3D.new()
+	rubber.albedo_color = Color(0.0, 0.0, 0.0, 0.28)
+	rubber.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rubber.cull_mode = BaseMaterial3D.CULL_DISABLED
+	rubber.roughness = 0.6
+	_add_mesh(_ribbon(rub_l, rub_r, Color.WHITE), rubber)
+
+	# Verges from kerb to barrier: gravel traps on the outside of corners,
+	# mown grass in stripes everywhere else.
+	gravel.resize(n)
+	gravel.fill(0)
+	var kc := _smooth(curvature, 5)  # raw curvature is noisy point to point
+	for i in n:
+		if absf(kc[i]) > 1.0 / 110.0:
+			var bit := 2 if kc[i] > 0.0 else 1  # right turn: gravel on the left
+			for o in range(-2, 6):  # runs on past the apex, where cars go off
+				gravel[(i + o + n) % n] |= bit
+	for i in n:
+		gravel[i] &= ~flat_verge[i]
+	for side: float in [-1.0, 1.0]:
+		var inner := PackedVector3Array()
+		var outer := PackedVector3Array()
+		var cols := []
+		var bit := 1 if side > 0 else 2
+		for i in n:
+			var w := (width_right[i] if side > 0 else width_left[i])
+			inner.append(surf(i, side * (w + KERB_WIDTH)) - Vector3(0, 0.004, 0))
+			outer.append(ground(i, side * (w + KERB_WIDTH + RUNOFF + 0.6)) - Vector3(0, 0.004, 0))
+			if gravel[i] & bit:
+				cols.append(Color(0.66, 0.58, 0.43))
+			else:
+				cols.append(Color(0.17, 0.31, 0.1) if (i / 3) % 2 == 0 else Color(0.14, 0.27, 0.08))
+		# Same winding as the road (left edge first) so both sides face up.
+		if side > 0:
+			_add_mesh(_ribbon_colored(inner, outer, cols), vc)
+		else:
+			_add_mesh(_ribbon_colored(outer, inner, cols), vc)
 
 	# Start / finish: checkered strip across the track at index 0.
 	_build_start_line(vc)
@@ -724,20 +1030,6 @@ func _build_meshes() -> void:
 	# Walls, dropped wherever they would cut across another part of the track.
 	_build_walls(vc)
 
-	# Ground
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	var size := bounds.size + Vector2(1600, 1600)
-	plane.size = size
-	ground.mesh = plane
-	ground.position = Vector3(bounds.get_center().x, 0.0, bounds.get_center().y)
-	var grass := StandardMaterial3D.new()
-	grass.albedo_color = Color(0.2, 0.38, 0.12)
-	grass.albedo_texture = _noise_texture(0.03, 0.55, 1.0)
-	grass.uv1_scale = Vector3(size.x / 30.0, size.y / 30.0, 1)
-	grass.roughness = 1.0
-	ground.material_override = grass
-	add_child(ground)
 
 
 func _build_start_line(mat: Material) -> void:
@@ -800,13 +1092,18 @@ func _build_walls(mat: Material) -> void:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for side: float in [-1.0, 1.0]:
 		var base := PackedVector3Array()
+		var top := PackedFloat32Array()
 		var ok := PackedByteArray()
 		base.resize(n)
+		top.resize(n)
 		ok.resize(n)
 		for i in n:
-			var w := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF
-			var wp := points[i] + rights[i] * w * side
+			var edge := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH
+			var w := edge + RUNOFF
+			var wp := ground(i, w * side)
 			base[i] = wp
+			# Full height above the road even where the verge drops away.
+			top[i] = maxf(wp.y, surf(i, edge * side).y) + WALL_HEIGHT
 			ok[i] = 0 if is_near_track(wp, KERB_WIDTH + 3.0) else 1
 			if side == pit_side and pit_progress(cum_dist[i]) >= -30.0 and pit_progress(cum_dist[i]) <= pit_len + 30.0:
 				ok[i] = 0  # the pit lane runs here instead
@@ -818,14 +1115,15 @@ func _build_walls(mat: Material) -> void:
 			var b := base[j]
 			if a.distance_to(b) > 25.0:
 				continue
-			var up := Vector3(0, WALL_HEIGHT, 0)
+			var at := Vector3(a.x, top[i], a.z)
+			var bt := Vector3(b.x, top[j], b.z)
 			var col := Color(0.82, 0.82, 0.85) if (i / 2) % 2 == 0 else Color(0.15, 0.3, 0.75)
 			st.set_color(col)
 			var n_out := rights[i] * side
-			for v in [a, b, b + up, a, b + up, a + up]:
+			for v in [a, b, bt, a, bt, at]:
 				st.set_normal(-n_out)
 				st.add_vertex(v)
-			faces.append_array([a, b, b + up, a, b + up, a + up])
+			faces.append_array([a, b, bt, a, bt, at])
 	_add_mesh(st.commit(), mat)
 	var body := StaticBody3D.new()
 	var shape := CollisionShape3D.new()
@@ -835,6 +1133,176 @@ func _build_walls(mat: Material) -> void:
 	shape.shape = concave
 	body.add_child(shape)
 	add_child(body)
+
+
+## Closed quad strip with one colour per segment.
+func _ribbon_colored(left: PackedVector3Array, right: PackedVector3Array, cols: Array) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := left.size()
+	for i in n:
+		var j := (i + 1) % n
+		st.set_color(cols[i])
+		for v in [left[i], right[j], right[i], left[i], left[j], right[j]]:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(v)
+	return st.commit()
+
+
+# ---------------------------------------------------------------- terrain
+
+## Rolling ground that follows the circuit: inverse-distance blend of the
+## track heights, always kept below the road and verges.
+func _build_terrain() -> void:
+	var n := points.size()
+	flat_verge.resize(n)
+	flat_verge.fill(0)
+	var pit_bit := 1 if pit_side > 0 else 2
+	for i in n:
+		var d := pit_progress(cum_dist[i])
+		if d >= -40.0 and d <= pit_len + 40.0:
+			flat_verge[i] |= pit_bit
+	for c in crossings:
+		var up: int = c[0]
+		for i in n:
+			var ds := absf(cum_dist[i] - cum_dist[up])
+			if minf(ds, length - ds) < 90.0:
+				flat_verge[i] |= 3
+	var cell := TERRAIN_CELL
+	var area := bounds.grow(800.0)
+	_terr_origin = area.position
+	_terr_nx = ceili(area.size.x / cell) + 1
+	_terr_nz = ceili(area.size.y / cell) + 1
+	var count := _terr_nx * _terr_nz
+	var sum_wh := PackedFloat32Array()
+	var sum_w := PackedFloat32Array()
+	var cap := PackedFloat32Array()
+	sum_wh.resize(count)
+	sum_w.resize(count)
+	cap.resize(count)
+	cap.fill(INF)
+	var mean := 0.0
+	for p in points:
+		mean += p.y
+	mean /= points.size()
+	var reach := 390.0
+	var rc := ceili(reach / cell)
+	for i in range(0, points.size(), 2):
+		var p := points[i]
+		var gx := roundi((p.x - _terr_origin.x) / cell)
+		var gz := roundi((p.z - _terr_origin.y) / cell)
+		var near := maxf(width_left[i], width_right[i]) + KERB_WIDTH + RUNOFF + 25.0
+		var drop := (maxf(width_left[i], width_right[i]) + KERB_WIDTH) * absf(camber[i])
+		for dz in range(-rc, rc + 1):
+			var z := gz + dz
+			if z < 0 or z >= _terr_nz:
+				continue
+			for dx in range(-rc, rc + 1):
+				var x := gx + dx
+				if x < 0 or x >= _terr_nx:
+					continue
+				var vx := _terr_origin.x + x * cell - p.x
+				var vz := _terr_origin.y + z * cell - p.z
+				var d2 := vx * vx + vz * vz
+				if d2 > reach * reach:
+					continue
+				var k := z * _terr_nx + x
+				var w := 1.0 / (d2 + 900.0)
+				sum_wh[k] += w * p.y
+				sum_w[k] += w
+				if d2 < near * near:
+					cap[k] = minf(cap[k], p.y - 1.0 - drop)
+	var w0 := 1.0 / (reach * reach)
+	_terr_h.resize(count)
+	for k in count:
+		_terr_h[k] = minf((sum_wh[k] + w0 * mean) / (sum_w[k] + w0), cap[k])
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for z in _terr_nz:
+		for x in _terr_nx:
+			st.set_uv(Vector2(x, z))
+			st.add_vertex(Vector3(_terr_origin.x + x * cell, _terr_h[z * _terr_nx + x], _terr_origin.y + z * cell))
+	for z in _terr_nz - 1:
+		for x in _terr_nx - 1:
+			var a := z * _terr_nx + x
+			var b := a + 1
+			var c := a + _terr_nx
+			var d := c + 1
+			for idx in [a, b, d, a, d, c]:
+				st.add_index(idx)
+	st.generate_normals()
+	var grass := StandardMaterial3D.new()
+	grass.albedo_color = Color(0.2, 0.38, 0.12)
+	grass.albedo_texture = _noise_texture(0.03, 0.55, 1.0)
+	grass.uv1_scale = Vector3(0.6, 0.6, 1)
+	grass.roughness = 1.0
+	grass.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := _add_mesh(st.commit(), grass)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+## Ground height anywhere on the map (bilinear on the terrain grid).
+func terrain_height(x: float, z: float) -> float:
+	if _terr_h.is_empty():
+		return 0.0
+	var fx := clampf((x - _terr_origin.x) / TERRAIN_CELL, 0.0, _terr_nx - 1.001)
+	var fz := clampf((z - _terr_origin.y) / TERRAIN_CELL, 0.0, _terr_nz - 1.001)
+	var ix := int(fx)
+	var iz := int(fz)
+	var tx := fx - ix
+	var tz := fz - iz
+	var k := iz * _terr_nx + ix
+	var a := lerpf(_terr_h[k], _terr_h[k + 1], tx)
+	var b := lerpf(_terr_h[k + _terr_nx], _terr_h[k + _terr_nx + 1], tx)
+	return lerpf(a, b, tz)
+
+
+## Concrete deck and abutments where the circuit passes over itself.
+func _build_bridges() -> void:
+	var concrete := StandardMaterial3D.new()
+	concrete.albedo_color = Color(0.62, 0.62, 0.6)
+	var earth := StandardMaterial3D.new()
+	earth.albedo_color = Color(0.16, 0.3, 0.1)
+	earth.roughness = 1.0
+	for c in crossings:
+		var up: int = c[0]
+		var lo: int = c[1]
+		var top := points[up].y + _road_y(up)
+		var bottom := points[lo].y
+		var lo_w := width_left[lo] + width_right[lo]
+		var span := lo_w + 2.0 * (KERB_WIDTH + RUNOFF + 2.0)
+		# Deck slab under the upper road, spanning the lower one
+		var deck_basis := Basis.looking_at(tangents[up], Vector3.UP)
+		_box(Vector3(width_left[up] + width_right[up] + 3.0, 1.2, span),
+				points[up] + Vector3(0, -0.65 + _road_y(up), 0), deck_basis, concrete)
+		# Parapets
+		for side: float in [-1.0, 1.0]:
+			var off := (width_right[up] if side > 0 else width_left[up]) + 1.2
+			_box(Vector3(0.4, 1.0, span), points[up] + rights[up] * off * side + Vector3(0, 0.45, 0),
+					deck_basis, concrete)
+		# Embankment either side of the deck, down to the ground.
+		var n := points.size()
+		for o in range(-24, 25):
+			var k := (up + o + n) % n
+			var k2 := (k + 1) % n
+			if _flat_dist_sq(points[k], points[lo]) < span * span / 4.0:
+				continue
+			var th := terrain_height(points[k].x, points[k].z)
+			var hd := points[k].y - th
+			if hd < 1.0:
+				continue
+			var wide := width_left[k] + width_right[k] + 2.0 * (KERB_WIDTH + RUNOFF) + 1.2
+			var centre := points[k] + rights[k] * (width_right[k] - width_left[k]) / 2.0
+			_box(Vector3(wide, hd + 0.6, points[k].distance_to(points[k2]) + 0.6),
+					Vector3(centre.x, th - 0.6 + (hd + 0.6) / 2.0 - 0.03, centre.z),
+					Basis.looking_at(tangents[k], Vector3.UP), earth)
+		# Abutments either side of the lower road
+		var ab_basis := Basis.looking_at(tangents[lo], Vector3.UP)
+		var hgt := maxf(top - bottom - 1.2, 1.0)
+		for side: float in [-1.0, 1.0]:
+			var off := (width_right[lo] if side > 0 else width_left[lo]) + 4.0
+			_box(Vector3(1.5, hgt, width_left[up] + width_right[up] + 3.0),
+					points[lo] + rights[lo] * off * side + Vector3(0, hgt / 2.0, 0), ab_basis, concrete)
 
 
 ## Builds a quad strip between two edge polylines. `mask` (optional) selects
@@ -865,8 +1333,9 @@ func _ribbon(left: PackedVector3Array, right: PackedVector3Array, color: Color,
 			var v1 := lerpf(d0, d1, t1)
 			var w0 := l0.distance_to(r0)
 			var w1 := l1.distance_to(r1)
-			var quad := [l0, r0, r1, l0, r1, l1]
-			var quv := [Vector2(0, v0), Vector2(w0, v0), Vector2(w1, v1), Vector2(0, v0), Vector2(w1, v1), Vector2(0, v1)]
+			# Clockwise seen from above, so the top is the front face.
+			var quad := [l0, r1, r0, l0, l1, r1]
+			var quv := [Vector2(0, v0), Vector2(w1, v1), Vector2(w0, v0), Vector2(0, v0), Vector2(0, v1), Vector2(w1, v1)]
 			for k in 6:
 				verts.append(quad[k])
 				normals.append(Vector3.UP)
@@ -932,6 +1401,7 @@ func _noise_texture(freq: float, lo: float, hi: float) -> NoiseTexture2D:
 # ---------------------------------------------------------------- scenery
 
 func _build_scenery() -> void:
+	_crowds = 0
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(length)
 
@@ -949,6 +1419,7 @@ func _build_scenery() -> void:
 		var gz := area.position.y
 		while gz < area.end.y:
 			var p := Vector3(gx + rng.randf_range(-4, 4), 0.0, gz + rng.randf_range(-4, 4))
+			p.y = terrain_height(p.x, p.z) - 1.0  # bury the tile's ground plate on slopes
 			gz += tile
 			# Sparse clumps rather than a carpet, and well clear of the barriers.
 			if rng.randf() > 0.45 or is_near_track(p, KERB_WIDTH + RUNOFF + tile * 0.75) or _in_pit_complex(p):
@@ -985,6 +1456,7 @@ func _build_scenery() -> void:
 			var p := points[i] + rights[i] * off * side
 			if is_near_track(p, KERB_WIDTH + RUNOFF + 12.0) or _in_pit_complex(p):
 				continue
+			p.y = terrain_height(p.x, p.z)
 			var mi := MeshInstance3D.new()
 			mi.mesh = tents
 			mi.material_override = tents_mat
@@ -1011,13 +1483,14 @@ func _build_scenery() -> void:
 				continue
 			var basis := Basis.looking_at(tangents[i], Vector3.UP)
 			for tier in 5:
-				var h := 1.2 + tier * 1.4
+				# Footings run down to the ground wherever it falls away.
+				var h := 1.2 + tier * 1.4 + 2.5
 				var step := MeshInstance3D.new()
 				var box := BoxMesh.new()
 				box.size = Vector3(2.4, h, 60)
 				step.mesh = box
 				step.material_override = crowd_mat if tier % 2 == 0 else stand_mat
-				step.transform = Transform3D(basis, base + rights[i] * side * (tier * 2.4) + Vector3(0, h / 2.0, 0))
+				step.transform = Transform3D(basis, base + rights[i] * side * (tier * 2.4) + Vector3(0, h / 2.0 - 2.5, 0))
 				add_child(step)
 			var roof := MeshInstance3D.new()
 			var rbox := BoxMesh.new()
@@ -1026,4 +1499,15 @@ func _build_scenery() -> void:
 			roof.material_override = roof_mat
 			roof.transform = Transform3D(basis, base + rights[i] * side * 5.0 + Vector3(0, 10.5, 0))
 			add_child(roof)
+			if _crowds < 2:
+				# Trackside crowd you hear as you pass the stands.
+				var crowd := AudioStreamPlayer3D.new()
+				crowd.stream = CROWD_SOUND
+				crowd.unit_size = 25.0
+				crowd.max_distance = 220.0
+				crowd.volume_db = -8.0
+				crowd.autoplay = true
+				crowd.position = base + rights[i] * side * 5.0 + Vector3(0, 4.0, 0)
+				add_child(crowd)
+				_crowds += 1
 			break

@@ -9,6 +9,11 @@ DRS flap and compound-coloured tyre stripes.
 with `tools/split_voxel_obj.py`. To use it, copy both files here as `car.obj` / `car.mtl`
 and change the `mtllib` line to `car.mtl`. Custom models don't get DRS or tyre stripes.
 
+**Local models (`local/`, git-ignored):** put third-party models you can't
+redistribute in `assets/cars/local/` as `car.fbx` or `car.glb` (with their textures
+beside them). They take priority over everything else, ship in your own APK builds,
+and never reach the public repo. The LowPolyF1 car lives there.
+
 Save a model here as **`car.glb`** (also accepted: `car.gltf`, `car.fbx`, `car.obj`)
 and every car on the grid uses it instead of the built-in low-poly car.
 
@@ -23,7 +28,13 @@ The one thing it can't guess is front vs back. If the cars drive backwards, set
 `CUSTOM_YAW_DEG := 180.0` in `scripts/car_model.gd`.
 
 Keep it **under ~30k triangles**, with textures at 1024 px or smaller, because there
-are ten on screen on a phone. Wheels won't spin or steer on a custom model.
+are ten on screen on a phone.
+
+If the model has separate wheel nodes named `Wheel`, `Wheel_001`... (or `tyre`/`tire`),
+they spin and the front pair steers; a node named like `drs`, `flap` or `Spoiler_002`
+opens as the DRS flap. Everything else is baked into one mesh per car. Models with a
+single texture atlas (Synty style) get team liveries from a shader: near-white paint
+becomes the team colour and red stripes the accent colour.
 
 ## Free open-wheel models on itch.io
 

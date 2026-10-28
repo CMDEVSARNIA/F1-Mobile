@@ -38,6 +38,13 @@ var _ghost_data := PackedFloat32Array()
 var _rec := PackedFloat32Array()
 var _ghost: Node3D
 var _rec_tick := 0
+# Race-engineer style cues for the player
+const SFX_POSITION_LOST := preload("res://assets/sfx/position-lost.ogg")
+const SFX_WRONG_WAY := preload("res://assets/sfx/wrong-way.ogg")
+var _cue: AudioStreamPlayer
+var _cue_cooldown := 0.0
+var _last_place := 0
+var _was_wrong_way := false
 var _was_valid := true
 
 
@@ -53,7 +60,7 @@ func _ready() -> void:
 
 	track = Track.new()
 	add_child(track)
-	if not track.build(track_info.file):
+	if not track.build(track_info):
 		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 		return
 
@@ -312,9 +319,30 @@ func _standings() -> Array:
 func _update_hud() -> void:
 	var now := player.clock
 	var order := _standings()
-	hud.update_telemetry(player, order.find(player) + 1, cars.size(), laps, now, state != State.COUNTDOWN)
-	if player.wrong_way and state == State.RACING:
+	var place := order.find(player) + 1
+	hud.update_telemetry(player, place, cars.size(), laps, now, state != State.COUNTDOWN)
+	var racing := state == State.RACING and not player.finished
+	_cue_cooldown -= get_physics_process_delta_time()
+	if player.wrong_way and racing:
 		hud.show_message("WRONG WAY", 0.3)
+		if not _was_wrong_way:
+			_play_cue(SFX_WRONG_WAY, true)
+	_was_wrong_way = player.wrong_way and racing
+	if racing and player.lap >= 1 and _last_place > 0 and place > _last_place:
+		_play_cue(SFX_POSITION_LOST)
+	_last_place = place
+
+
+func _play_cue(stream: AudioStream, force := false) -> void:
+	if _cue == null:
+		_cue = AudioStreamPlayer.new()
+		_cue.volume_db = -6.0
+		add_child(_cue)
+	if _cue_cooldown > 0.0 and not force:
+		return
+	_cue.stream = stream
+	_cue.play()
+	_cue_cooldown = 2.5
 
 
 func _on_pit_event(car: Car, what: String) -> void:
@@ -443,9 +471,16 @@ func _time_trial_tick() -> void:
 		var span := _ghost_data[b] - _ghost_data[a]
 		var f := 0.0 if span <= 0.0 else clampf((t - _ghost_data[a]) / span, 0.0, 1.0)
 		_ghost.visible = true
-		_ghost.position = Vector3(lerpf(_ghost_data[a + 2], _ghost_data[b + 2], f), 0.0,
+		var gp := Vector3(lerpf(_ghost_data[a + 2], _ghost_data[b + 2], f), 0.0,
 				lerpf(_ghost_data[a + 3], _ghost_data[b + 3], f))
-		_ghost.rotation.y = lerp_angle(_ghost_data[a + 4], _ghost_data[b + 4], f)
+		var gs := lerpf(_ghost_data[a + 1], _ghost_data[b + 1], f)
+		if absf(_ghost_data[b + 1] - _ghost_data[a + 1]) > track.length * 0.5:
+			gs = _ghost_data[b + 1]  # across the line
+		var gi := track.index_at_distance(gs)
+		var g_lat := (gp - track.points[gi]).dot(track.rights[gi])
+		gp.y = track.ground_height(gs, g_lat)
+		_ghost.position = gp
+		_ghost.rotation = Vector3(atan(track.slope_at(gs)), lerp_angle(_ghost_data[a + 4], _ghost_data[b + 4], f), 0.0)
 		# Delta: our lap time minus the ghost's time at the same point of the lap.
 		var j := _ghost_index(player.lap_pos, 1)
 		var pa := j * GHOST_STRIDE

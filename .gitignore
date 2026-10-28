@@ -10,3 +10,6 @@ export_credentials.cfg
 *.apk
 *.aab
 *.keystore
+
+# Locally supplied third-party car models (not ours to redistribute)
+/assets/cars/local/

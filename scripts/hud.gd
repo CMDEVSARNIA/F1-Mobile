@@ -330,7 +330,7 @@ func _panel() -> PanelContainer:
 	sb.bg_color = Color(0.06, 0.06, 0.09, 0.92)
 	sb.set_corner_radius_all(14)
 	sb.set_content_margin_all(28)
-	sb.border_color = Color(0.88, 0.02, 0.0)
+	sb.border_color = GameState.BRAND_ORANGE
 	sb.border_width_top = 6
 	p.add_theme_stylebox_override("panel", sb)
 	var box := VBoxContainer.new()
