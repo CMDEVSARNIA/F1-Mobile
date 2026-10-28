@@ -9,7 +9,7 @@ code and data, so the project runs with no third-party art.
 
 | Feature | Where |
 | --- | --- |
-| 20 real circuits in calendar order (Albert Park to Yas Marina, plus Sepang, Hockenheim, Nurburgring, Sochi) from measured centerlines and track widths | `tracks/*.csv`, `scripts/track.gd` |
+| 20 real circuits in calendar order (Albert Park to Yas Marina, plus Sepang, Hockenheim, Nurburgring, Sochi) from measured centerlines and track widths. The satellite-derived widths run narrow (median ~9 m at Spa, Suzuka, Monza), so they're scaled ×1.15 with the FIA's 12 m+ minimum (12.5 m here) and 15 m from the grid to Turn 1 | `tracks/*.csv`, `scripts/track.gd` |
 | Track generation: asphalt with a rubbered-in racing line, edge lines, kerbs on corners, gravel traps on the outside of slow corners, mown-grass verges, barriers with collision, grandstands, Kenney forest and paddock tents, grid slots, chequered start line | `scripts/track.gd` |
 | Elevation: hand-built height profiles for Spa (Eau Rouge/Raidillon, ~90 m), Suzuka (with a real bridge at the crossover), Red Bull Ring, COTA's Turn 1 climb, Interlagos, Zandvoort (19° and 17° banking), Hungaroring, Catalunya and the Nürburgring; gentle undulation elsewhere. Rolling terrain follows the circuit | `scripts/track_profiles.gd`, `scripts/track.gd` |
 | Hills in the physics: gravity on gradients (slower uphill, longer braking downhill), more grip in compressions and less over crests, banking that holds the car in; the AI speed plan knows all of it | `scripts/car.gd`, `scripts/track.gd` |
@@ -25,7 +25,8 @@ code and data, so the project runs with no third-party art.
 | HUD: position, lap, lap/last/best times, minimap, round icon buttons, F1-style driver display with shift lights, gear, speed and pedal bars | `scripts/hud.gd`, `scripts/ui/` |
 | Sound: engine loop pitched by RPM, tyre squeal, light and heavy impacts, gravel rattle, stall on reset, trackside crowd, wrong-way and lost-position cues; AI cars are positional so you hear them pass | `scripts/car_audio.gd`, `scripts/race.gd` |
 | Cameras: chase, far chase, cockpit that pitches and rolls with the car (CAM button / `C`) | `scripts/chase_camera.gd` |
-| Branding: Formula Force logo in the menu, splash screen and launcher icon | `assets/ui/` |
+| Branding: Formula Force logo in the menu, splash screen, launcher icon, race loading screen, on boards all round every circuit and on the start gantry | `assets/ui/`, `scripts/track.gd` |
+| Sky and light: painted cloud panorama with a shader sun that matches the scene's light, warm sun with two-split shadows to 140 m, sky-coloured ambient and distance haze, light glow | `assets/sky/`, `scripts/race.gd` |
 
 ## Running it
 

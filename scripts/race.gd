@@ -10,6 +10,8 @@ const Car = preload("res://scripts/car.gd")
 const ChaseCamera = preload("res://scripts/chase_camera.gd")
 const Hud = preload("res://scripts/hud.gd")
 const CarAudio = preload("res://scripts/car_audio.gd")
+const SKY_SHADER := preload("res://assets/sky/sky.gdshader")
+const SKY_TEXTURE := preload("res://assets/sky/sky_clouds.jpg")
 const ControlsPanel = preload("res://scripts/ui/controls_panel.gd")
 const CarModel = preload("res://scripts/car_model.gd")
 const GHOST_STRIDE := 5  # floats per ghost sample: t, lap_pos, x, z, yaw
@@ -110,33 +112,54 @@ func _ready() -> void:
 
 func _build_environment() -> void:
 	var env := Environment.new()
+	# Cloud panorama with the sun drawn in by the sky shader.
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.25, 0.47, 0.8)
-	sky_mat.sky_horizon_color = Color(0.68, 0.78, 0.9)
-	sky_mat.ground_horizon_color = Color(0.68, 0.78, 0.9)
-	sky_mat.ground_bottom_color = Color(0.3, 0.35, 0.3)
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = SKY_SHADER
+	sky_mat.set_shader_parameter("panorama", SKY_TEXTURE)
 	sky.sky_material = sky_mat
+	sky.radiance_size = Sky.RADIANCE_SIZE_128
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
+	# Fill light from the sky so shadows are blue-ish rather than black.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.55
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 0.95
+	env.ambient_light_sky_contribution = 1.0
+	env.ambient_light_energy = 0.75
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.05
+	env.tonemap_white = 6.0
+	# Distance haze takes the sky's colour, so far hills fade naturally.
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.7, 0.78, 0.88)
-	env.fog_density = 0.0009
+	env.fog_light_color = Color(0.72, 0.8, 0.9)
+	env.fog_density = 0.0006
+	env.fog_aerial_perspective = 0.55
+	env.fog_sun_scatter = 0.12
 	env.fog_sky_affect = 0.0
+	# Soft glow on the sun and bright highlights.
+	env.glow_enabled = true
+	env.glow_intensity = 0.35
+	env.glow_bloom = 0.03
+	env.glow_hdr_threshold = 1.1
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.08
+	env.adjustment_contrast = 1.04
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, -35, 0)
-	sun.light_energy = 1.15
+	sun.rotation_degrees = Vector3(-42, -35, 0)
+	sun.light_color = Color(1.0, 0.96, 0.9)
+	sun.light_energy = 1.35
 	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 80.0
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.2
+	sun.shadow_blur = 1.5
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_split_1 = 0.25
+	sun.directional_shadow_max_distance = 140.0
+	sun.directional_shadow_fade_start = 0.85
 	add_child(sun)
 
 

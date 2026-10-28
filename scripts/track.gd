@@ -19,7 +19,14 @@ const PLAN_GRIP_MARGIN := 0.85
 const TrackProfiles = preload("res://scripts/track_profiles.gd")
 const BRIDGE_CLEARANCE := 7.5  # metres between road levels where the track crosses itself
 const TERRAIN_CELL := 30.0
+# Real circuits are wider than the satellite-derived widths in the data
+# (median ~9 m at Spa, Suzuka and Monza). The FIA asks for at least 12 m,
+# and 15 m from the grid to the first corner.
+const WIDTH_SCALE := 1.15
+const MIN_WIDTH := 12.5
+const GRID_WIDTH := 15.0
 const CROWD_SOUND := preload("res://assets/sfx/crowd-trackside.ogg")
+const LOGO := preload("res://assets/ui/logo.png")
 
 var points := PackedVector3Array()
 var tangents := PackedVector3Array()
@@ -67,6 +74,7 @@ func build(info: Dictionary) -> bool:
 	if not _load_csv(info.file):
 		return false
 	_compute_frames()
+	_widen()
 	_build_grid()
 	_compute_elevation(info.get("id", ""))
 	_compute_speed_profile()
@@ -139,6 +147,25 @@ func _compute_frames() -> void:
 		var lc := (c - a).length()
 		var denom := la * lb * lc
 		curvature[i] = 0.0 if denom < 0.001 else 2.0 * cross / denom
+
+
+## Scale the measured widths toward real-world circuit widths, keeping each
+## track's shape (where it narrows and opens up) and the centreline offset.
+func _widen() -> void:
+	var n := points.size()
+	var k := PackedFloat32Array()
+	k.resize(n)
+	for i in n:
+		var total := width_left[i] + width_right[i]
+		var s := minf(cum_dist[i], length - cum_dist[i])  # distance from the line
+		var target := maxf(total * WIDTH_SCALE, MIN_WIDTH)
+		if s < 350.0:
+			target = maxf(target, GRID_WIDTH)
+		k[i] = target / maxf(total, 1.0)
+	k = _smooth(_smooth(k, 6), 6)  # no steps where the minimum kicks in
+	for i in n:
+		width_left[i] *= k[i]
+		width_right[i] *= k[i]
 
 
 # ---------------------------------------------------------------- elevation
@@ -636,6 +663,25 @@ func _build_gantry() -> void:
 		_box(Vector3(0.7, 10.6, 0.7), p + Vector3(0, 2.3, 0), basis, grey)
 	var mid := (left + right) / 2.0
 	_box(Vector3(left.distance_to(right) + 0.7, 0.9, 0.9), mid + Vector3(0, 7.2, 0), basis, grey)
+	# Logo banner on top of the gantry, facing the grid.
+	var banner := QuadMesh.new()
+	banner.size = Vector2(7.0, 7.0 * LOGO.get_height() / LOGO.get_width())
+	var bc := mid + Vector3(0, 7.65 + banner.size.y / 2.0, 0) - tangents[0] * 0.5
+	var back := StandardMaterial3D.new()
+	back.albedo_color = Color(0.04, 0.04, 0.05)
+	_box(Vector3(banner.size.x + 0.4, banner.size.y + 0.3, 0.2), bc + tangents[0] * 0.12, basis, back)
+	var face := StandardMaterial3D.new()
+	face.albedo_texture = LOGO
+	face.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	face.emission_enabled = true
+	face.emission_texture = LOGO
+	face.emission_energy_multiplier = 0.25
+	var bm := MeshInstance3D.new()
+	bm.mesh = banner
+	bm.material_override = face
+	# QuadMesh faces +Z; turn it to face the cars coming up to the line.
+	bm.transform = Transform3D(Basis.looking_at(tangents[0], Vector3.UP), bc)
+	add_child(bm)
 	var housing := StandardMaterial3D.new()
 	housing.albedo_color = Color(0.05, 0.05, 0.06)
 	for k in 5:
@@ -667,28 +713,54 @@ func set_gantry_lights(n: int) -> void:
 		_gantry_lights[k].emission_energy_multiplier = 1.2 if on else 0.0
 
 
-## Our own trackside boards along the start straight.
+## Formula Force boards all the way round, on the outside of the corner
+## ahead (where a driver looks), angled toward oncoming cars.
 func _build_boards() -> void:
-	var board := StandardMaterial3D.new()
-	board.albedo_color = Color(0.88, 0.02, 0.0)
-	for s: float in [-120.0, -60.0, 60.0, 120.0, 180.0]:
-		var i := index_at_distance(s)
-		var side := -pit_side
-		var w := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 0.4
-		var p := points[i] + rights[i] * side * w + Vector3(0, 1.9, 0)
-		if is_near_track(p, KERB_WIDTH + 2.0):
+	var face := StandardMaterial3D.new()
+	face.albedo_texture = LOGO
+	face.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	face.emission_enabled = true  # stays readable in shadow
+	face.emission_texture = LOGO
+	face.emission_energy_multiplier = 0.25
+	var backing := StandardMaterial3D.new()
+	backing.albedo_color = Color(0.04, 0.04, 0.05)
+	var post := StandardMaterial3D.new()
+	post.albedo_color = Color(0.3, 0.3, 0.32)
+	var quad := QuadMesh.new()
+	quad.size = Vector2(7.2, 7.2 * LOGO.get_height() / LOGO.get_width())
+	var n := points.size()
+	var spacing := 220.0
+	var count := int(length / spacing)
+	for k in count:
+		var s0 := (k + 0.5) * spacing
+		var i := index_at_distance(s0)
+		# Outside of whatever the track does next.
+		var turn := 0.0
+		for o in range(4, 40):
+			turn += curvature[(i + o) % n]
+		var side := -signf(turn) if absf(turn) > 0.02 else (1.0 if k % 2 == 0 else -1.0)
+		if side == pit_side and pit_progress(s0) > -60.0 and pit_progress(s0) < pit_len + 60.0:
+			side = -side
+		var w := (width_right[i] if side > 0 else width_left[i]) + KERB_WIDTH + RUNOFF + 1.8
+		var base := ground(i, w * side)
+		if is_near_track(base, KERB_WIDTH + RUNOFF) or _in_pit_complex(base):
 			continue
-		# Label3D text reads from its +Z side, so -Z points away from the track.
-		var basis := Basis.looking_at(rights[i] * side, Vector3.UP)
-		_box(Vector3(9.0, 1.6, 0.15), p, basis, board)
-		var label := Label3D.new()
-		label.text = "FORMULA FORCE"
-		label.font_size = 96
-		label.pixel_size = 0.009
-		label.outline_size = 0
-		label.modulate = Color.WHITE
-		label.transform = Transform3D(basis, p - rights[i] * side * 0.1)
-		add_child(label)
+		var road_y := surf(i, 0.0).y
+		var bottom := maxf(base.y, road_y) + WALL_HEIGHT + 0.5
+		var centre := Vector3(base.x, bottom + quad.size.y / 2.0, base.z)
+		var front := (-rights[i] * side * 0.9 - tangents[i] * 0.45).normalized()
+		var basis := Basis.looking_at(-front, Vector3.UP)  # quad's +Z faces `front`
+		_box(Vector3(quad.size.x + 0.4, quad.size.y + 0.3, 0.2), centre - front * 0.12, basis, backing)
+		var mi := MeshInstance3D.new()
+		mi.mesh = quad
+		mi.material_override = face
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.transform = Transform3D(basis, centre)
+		add_child(mi)
+		var post_h := centre.y - base.y
+		for px: float in [-0.38, 0.38]:
+			var pp := centre + basis.x * quad.size.x * px - front * 0.25
+			_box(Vector3(0.22, post_h, 0.22), Vector3(pp.x, base.y + post_h / 2.0 - 0.3, pp.z), basis, post)
 
 
 func _box(size: Vector3, pos: Vector3, basis: Basis, mat: Material) -> MeshInstance3D:
@@ -1082,7 +1154,7 @@ func grid_distance(slot: int) -> float:
 
 
 func grid_lateral(slot: int) -> float:
-	return -2.8 if slot % 2 == 0 else 2.8
+	return -3.4 if slot % 2 == 0 else 3.4
 
 
 func _build_walls(mat: Material) -> void:

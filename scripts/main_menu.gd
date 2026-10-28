@@ -268,6 +268,35 @@ func _open_controls() -> void:
 
 func _start() -> void:
 	GameState.save()
+	# Building the circuit takes a moment on a phone: show the logo meanwhile.
+	var cover := ColorRect.new()
+	cover.color = Color.BLACK
+	cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cover.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(cover)
+	var logo := TextureRect.new()
+	logo.texture = LOGO
+	logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	logo.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	logo.offset_left = -360
+	logo.offset_right = 360
+	logo.offset_top = -170
+	logo.offset_bottom = 100
+	cover.add_child(logo)
+	var info := Label.new()
+	info.text = "LOADING  %s" % GameState.current_track().name.to_upper()
+	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	info.add_theme_font_size_override("font_size", 22)
+	info.add_theme_color_override("font_color", GameState.BRAND_GOLD)
+	info.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	info.offset_left = -400
+	info.offset_right = 400
+	info.offset_top = -90
+	info.offset_bottom = -50
+	cover.add_child(info)
+	await get_tree().process_frame
+	await get_tree().process_frame
 	get_tree().change_scene_to_file("res://scenes/race.tscn")
 
 
