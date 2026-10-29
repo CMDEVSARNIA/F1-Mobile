@@ -47,6 +47,16 @@ var grade := 0.0  # rise per metre in the direction the car points
 var bank := 0.0  # rise per metre toward the car's right
 var load_factor := 1.0  # >1 in compressions, <1 over crests
 const GRAVEL_GRIP := 0.4
+
+# Damage. 0 off, 1 visual only, 2 realistic (handling, punctures, retirement).
+const Debris = preload("res://scripts/debris.gd")
+const RETIRE_SPEED := 38.0  # m/s straight into something: race over
+var damage_mode := 2
+var dmg := {"front_wing": 0.0, "rear_wing": 0.0, "susp_l": 0.0, "susp_r": 0.0}
+var puncture := 0  # 0 none, -1 left side, 1 right side
+var puncture_front := true
+var retired := false
+var _retire_timer := 0.0
 var wrong_way := false
 var skid := 0.0  # 0..1, drives the tyre-squeal sound
 var _impact_cooldown := 0.0
@@ -155,6 +165,7 @@ signal lap_completed(car, lap_time: float)
 signal crossed_finish(car)
 signal impact(strength: float)
 signal reset
+signal damaged(car, what: String)
 
 var model: Node3D
 
@@ -203,6 +214,9 @@ func _physics_process(dt: float) -> void:
 	if track == null:
 		return
 	clock += dt
+	if retired:
+		_retired_tick(dt)
+		return
 	if not controls_enabled and not finished:
 		# Held on the grid: no creeping, no reversing.
 		velocity = Vector3.ZERO
@@ -289,7 +303,7 @@ func _ai_input() -> void:
 	var line := ai_line
 	# Very simple overtaking/avoidance: pick the other side of a car ahead.
 	for o in others:
-		if o == self or o.in_pit:
+		if o == self or o.in_pit or o.retired:
 			continue
 		var gap: float = o.race_dist - race_dist
 		if gap > 0.0 and gap < 22.0 and absf(o.lateral - lateral) < 2.4:
@@ -300,6 +314,14 @@ func _ai_input() -> void:
 	var v_target := _target_speed_ahead() * ai_skill * sqrt(tyre_grip())
 	if on_grass:
 		v_target = minf(v_target, 25.0)
+	# Don't drive into the back of a slower car we can't get round yet:
+	# keep a speed we could still brake down to theirs before contact.
+	for o in others:
+		if o == self or o.retired:
+			continue
+		var gap: float = o.race_dist - race_dist
+		if gap > 0.0 and gap < 40.0 and absf(o.lateral - lateral) < 2.3:
+			v_target = minf(v_target, maxf(o.speed, 0.0) + sqrt(2.0 * 18.0 * maxf(gap - 7.0, 0.0)))
 	if speed < v_target - 1.0:
 		throttle = 1.0
 		brake = 0.0
@@ -333,7 +355,7 @@ func _integrate(dt: float) -> void:
 	var v_long := velocity.dot(fwd)
 	var v_lat := velocity.dot(right)
 	var tg := tyre_grip()
-	var grip_mul := (GRAVEL_GRIP if on_gravel else 0.5 if on_grass else 1.0) * tg * load_factor
+	var grip_mul := (GRAVEL_GRIP if on_gravel else 0.5 if on_grass else 1.0) * tg * load_factor * damage_grip()
 	if tyre_wear_enabled and controls_enabled:
 		var c: Dictionary = COMPOUNDS[compound]
 		var rate: float = 1.0 / (c.life * race_laps * track.length)
@@ -360,8 +382,8 @@ func _integrate(dt: float) -> void:
 	# Aero drag + rolling resistance, plus heavy drag on grass. An open DRS
 	# flap and a car ahead's wake both cut the aero part.
 	tow = _compute_tow()
-	var aero := 0.0004 * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
-	var drag := 0.25 + aero * v_long * v_long
+	var aero := 0.0004 * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow) * _damage_drag()
+	var drag := 0.25 + aero * v_long * v_long + _puncture_drag(v_long)
 	if on_gravel:
 		# Stones bleed speed fast, but a slow car can still crawl out.
 		drag += 0.012 * v_long * v_long + 4.5 * clampf(absf(v_long) / 15.0, 0.15, 1.0)
@@ -377,7 +399,7 @@ func _integrate(dt: float) -> void:
 	# Steering (bicycle model), clamped by available lateral grip.
 	var vabs := absf(v_long)
 	var max_angle := lerpf(0.42, 0.05, clampf(vabs / 75.0, 0.0, 1.0))
-	var yaw_rate := -v_long * tan(steer * max_angle) / WHEELBASE
+	var yaw_rate := -v_long * tan(_steer_eff() * max_angle) / WHEELBASE
 	var yaw_cap := grip_accel(vabs) * grip_mul / maxf(vabs, 0.5)
 	# Banking holds the car in when it turns toward the low side.
 	if absf(bank) > 0.01:
@@ -399,6 +421,7 @@ func _integrate(dt: float) -> void:
 	v_lat -= 9.81 * bank * dt * 0.3  # slide down a banked slope when slow
 	velocity = fwd * v_long + right * v_lat
 	velocity.y = 0.0
+	var v_pre := velocity
 	move_and_slide()
 	# Scrub speed on wall hits so contact hurts.
 	_impact_cooldown -= dt
@@ -406,7 +429,9 @@ func _integrate(dt: float) -> void:
 		var col := get_slide_collision(c)
 		var hit := absf(col.get_normal().dot(fwd))
 		var strength := hit * absf(v_long)
-		if strength > 2.0 and _impact_cooldown <= 0.0:
+		if _impact_cooldown <= 0.0 and _take_hit(col, v_pre):
+			_impact_cooldown = 0.4
+		elif strength > 2.0 and _impact_cooldown <= 0.0:
 			impact.emit(strength)
 			_impact_cooldown = 0.4
 		velocity *= 1.0 - 0.5 * hit * dt * 10.0
@@ -437,13 +462,16 @@ func _integrate_realistic(dt: float, tg: float) -> void:
 	basis = global_transform.basis
 	velocity = -basis.z * _vx - basis.x * _vy
 	velocity.y = 0.0
+	var v_pre := velocity
 	move_and_slide()
 	_impact_cooldown -= dt
 	for c in get_slide_collision_count():
 		var col := get_slide_collision(c)
 		var hit := absf(col.get_normal().dot(-basis.z))
 		var strength := hit * absf(_vx)
-		if strength > 2.0 and _impact_cooldown <= 0.0:
+		if _impact_cooldown <= 0.0 and _take_hit(col, v_pre):
+			_impact_cooldown = 0.4
+		elif strength > 2.0 and _impact_cooldown <= 0.0:
 			impact.emit(strength)
 			_impact_cooldown = 0.4
 		velocity *= 1.0 - 0.5 * hit * dt * 10.0
@@ -462,13 +490,13 @@ func _realistic_step(h: float, tg: float) -> Vector3:
 	# Compressions press the tyres into the road, crests unload them.
 	var fz_f := maxf((R_MASS * 9.81 * R_B / L + down * 0.45) * load_factor - transfer, 200.0)
 	var fz_r := maxf((R_MASS * 9.81 * R_A / L + down * 0.55) * load_factor + transfer, 200.0)
-	var cap_f := grip * fz_f
-	var cap_r := grip * fz_r * TIRE_REAR_GRIP
+	var cap_f := grip * fz_f * damage_grip_front()
+	var cap_r := grip * fz_r * TIRE_REAR_GRIP * damage_grip_rear()
 
 	# Front wheel angle. Lock shrinks with speed so a touch input never asks
 	# for absurd slip angles at 300 km/h, like a speed-sensitive rack.
 	var dmax := clampf(0.38 - v * 0.0045, 0.065, 0.38)
-	var delta := -steer * dmax
+	var delta := -_steer_eff() * dmax
 	# Slip-angle limiter: full lock asks the fronts for (a bit past) their
 	# peak grip, never more, the way a good driver feels the wheel. Keeps
 	# digital touch steering from scrubbing the fronts and snapping the rear.
@@ -524,8 +552,8 @@ func _realistic_step(h: float, tg: float) -> Vector3:
 	_fy_r_prev = fy_r
 
 	# Resistances: aero drag (cut by DRS and tow), rolling, grass
-	var aero := 0.5 * R_RHO * R_CDA * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow)
-	var resist := aero * _vx * absf(_vx) + 200.0 * signf(_vx)
+	var aero := 0.5 * R_RHO * R_CDA * (DRS_DRAG if drs_open else 1.0) * (1.0 - 0.45 * tow) * _damage_drag()
+	var resist := aero * _vx * absf(_vx) + 200.0 * signf(_vx) + R_MASS * _puncture_drag(_vx)
 	if on_gravel:
 		resist += R_MASS * (0.012 * _vx * absf(_vx) + 4.5 * clampf(_vx / 15.0, -1.0, 1.0))
 	elif on_grass:
@@ -566,6 +594,164 @@ func _realistic_step(h: float, tg: float) -> Vector3:
 			_r += signf(beta) * excess * 14.0 * h * v / 20.0
 	var slide := maxf(absf(alpha_f), absf(alpha_r)) / 0.12 - 0.7
 	return Vector3(spin, lock, slide)
+
+
+# ------------------------------------------------------------ damage
+
+## Collision response: work out where the car was hit and how hard, and
+## damage that part. Returns true if it counted as a damaging hit.
+func _take_hit(col: KinematicCollision3D, v_pre: Vector3) -> bool:
+	if damage_mode == 0:
+		return false
+	var n := col.get_normal()
+	var other := col.get_collider()
+	var other_v := Vector3.ZERO
+	if other is CharacterBody3D:
+		other_v = (other as CharacterBody3D).velocity
+	var approach := (v_pre - other_v).dot(-n)
+	if other is CharacterBody3D:
+		approach *= 0.6  # two cars share the energy of a contact
+	if approach < 5.0:
+		return false
+	var local := global_transform.affine_inverse() * col.get_position()
+	var what := ""
+	if local.z < -1.7 or (local.z < -1.0 and absf(local.x) < 0.4):
+		what = _hurt("front_wing", (approach - 5.0) / 22.0)
+	elif local.z > 1.9:
+		what = _hurt("rear_wing", (approach - 6.0) / 26.0)
+	else:
+		var key := "susp_r" if local.x > 0.0 else "susp_l"
+		what = _hurt(key, (approach - 7.0) / 40.0)
+		if damage_mode == 2 and puncture == 0 and approach > 10.0 and randf() < (approach - 10.0) / 25.0:
+			puncture = 1 if local.x > 0.0 else -1
+			puncture_front = local.z < 0.4
+			what = "puncture"
+	impact.emit(approach)
+	if model:
+		model.debris_burst(col.get_position(), v_pre * 0.4)
+	if damage_mode == 2 and (approach > RETIRE_SPEED or dmg.susp_l >= 1.0 or dmg.susp_r >= 1.0):
+		retire()
+		return true
+	if what != "":
+		damaged.emit(self, what)
+	return true
+
+
+## Adds damage to one part; returns what to tell the driver, if anything.
+func _hurt(part: String, amount: float) -> String:
+	if amount <= 0.0:
+		return ""
+	var before: float = dmg[part]
+	if before >= 1.0:
+		return ""
+	dmg[part] = minf(before + amount, 1.0)
+	if model:
+		model.set_part_damage(part, dmg[part])
+	if dmg[part] >= 1.0 and part.ends_with("wing"):
+		if model:
+			# The model hides its part and hands back a copy (with the part's
+			# world transform) that bounces off down the track.
+			var piece: Node3D = model.detach_part(part)
+			if piece:
+				var d := Debris.new()
+				d.track = track
+				d.velocity = velocity * 0.7 + Vector3(randf_range(-3, 3), randf_range(3, 6), randf_range(-3, 3))
+				d.spin = Vector3(randf_range(-8, 8), randf_range(-6, 6), randf_range(-8, 8))
+				get_parent().add_child(d)
+				d.global_transform = piece.transform
+				piece.transform = Transform3D.IDENTITY
+				d.add_child(piece)
+		return part + "_lost"
+	if dmg[part] >= 0.35 and before < 0.35:
+		return part
+	return ""
+
+
+## Retire after a big hit: the car stops, smokes, and is cleared away.
+func retire() -> void:
+	if retired:
+		return
+	retired = true
+	controls_enabled = false
+	throttle = 0.0
+	velocity = Vector3.ZERO
+	speed = 0.0
+	_retire_timer = 0.0
+	if model:
+		model.smoke(true)
+	damaged.emit(self, "retired")
+
+
+func _retired_tick(dt: float) -> void:
+	_retire_timer += dt
+	velocity = Vector3.ZERO
+	speed = 0.0
+	throttle = 0.0
+	_update_gear()
+	# Marshals clear the car after a few seconds so it isn't a hidden wall.
+	if _retire_timer > 4.0 and visible:
+		visible = false
+		for cs: CollisionShape3D in find_children("*", "CollisionShape3D", false, false):
+			cs.disabled = true
+
+
+## Front wing gone or a puncture: worth a stop.
+func needs_repair() -> bool:
+	return damage_mode == 2 and (dmg.front_wing >= 0.4 or puncture != 0)
+
+
+func _pit_repair() -> void:
+	if dmg.front_wing > 0.0:
+		dmg.front_wing = 0.0
+		if model:
+			model.repair_part("front_wing")
+	puncture = 0
+
+
+func _realistic_damage() -> bool:
+	return damage_mode == 2
+
+
+## Overall grip multiplier for the arcade model.
+func damage_grip() -> float:
+	if not _realistic_damage():
+		return 1.0
+	var g: float = (1.0 - 0.2 * dmg.front_wing) * (1.0 - 0.12 * dmg.rear_wing) \
+			* (1.0 - 0.15 * maxf(dmg.susp_l, dmg.susp_r))
+	return g * (0.6 if puncture != 0 else 1.0)
+
+
+func damage_grip_front() -> float:
+	if not _realistic_damage():
+		return 1.0
+	var g: float = (1.0 - 0.35 * dmg.front_wing) * (1.0 - 0.15 * maxf(dmg.susp_l, dmg.susp_r))
+	return g * (0.5 if puncture != 0 and puncture_front else 1.0)
+
+
+func damage_grip_rear() -> float:
+	if not _realistic_damage():
+		return 1.0
+	var g: float = (1.0 - 0.3 * dmg.rear_wing) * (1.0 - 0.1 * maxf(dmg.susp_l, dmg.susp_r))
+	return g * (0.5 if puncture != 0 and not puncture_front else 1.0)
+
+
+## Less wing means less drag too.
+func _damage_drag() -> float:
+	return 1.0 - 0.12 * dmg.rear_wing if _realistic_damage() else 1.0
+
+
+func _puncture_drag(v: float) -> float:
+	if puncture == 0 or not _realistic_damage():
+		return 0.0
+	return signf(v) * (0.003 * v * v + 1.5)
+
+
+## Steering input plus the pull of bent suspension or a flat tyre.
+func _steer_eff() -> float:
+	if not _realistic_damage():
+		return steer
+	var pull: float = (dmg.susp_r - dmg.susp_l) * 0.1 + puncture * 0.12
+	return clampf(steer + pull, -1.0, 1.0)
 
 
 func _update_body_motion(dt: float) -> void:
@@ -646,7 +832,7 @@ func drs_state() -> int:
 func gap_ahead_seconds() -> float:
 	var best := INF
 	for o in others:
-		if o == self:
+		if o == self or o.retired:
 			continue
 		var d: float = o.race_dist - race_dist
 		if d > 0.0 and d < best:
@@ -754,6 +940,8 @@ func _pit_drive(dt: float) -> void:
 		if _pit_state == 0 and (to_box < 0.6 or (to_box < 3.0 and absf(speed) < 1.0)):
 			_pit_state = 1
 			_pit_timer = 2.3 + randf_range(0.0, 0.7)
+			if dmg.front_wing > 0.15:
+				_pit_timer += 5.0  # new nose
 			pit_event.emit(self, "stop")
 		if _pit_state == 1:
 			velocity = Vector3.ZERO
@@ -763,6 +951,7 @@ func _pit_drive(dt: float) -> void:
 			_pit_timer -= dt
 			if _pit_timer <= 0.0:
 				set_compound(pit_compound)
+				_pit_repair()
 				pit_stops += 1
 				_pit_state = 2
 				pit_event.emit(self, "done")
@@ -796,7 +985,15 @@ func _pit_line(d: float) -> float:
 ## AI: pit when the tyres won't make the flag, onto the softest compound
 ## that will.
 func _ai_strategy() -> void:
-	if pit_requested or in_pit or not tyre_wear_enabled or finished:
+	if pit_requested or in_pit or finished:
+		return
+	if needs_repair():
+		var c := compound
+		if mandatory_two and compounds_used.size() < 2:
+			c = 1 if compound != 1 else 2
+		request_pit(c)
+		return
+	if not tyre_wear_enabled:
 		return
 	var remaining := race_laps - (lap - 1) - lap_pos / track.length
 	if remaining < 0.35:
@@ -818,7 +1015,7 @@ func _compute_tow() -> float:
 		return 0.0
 	var best := 0.0
 	for o in others:
-		if o == self:
+		if o == self or o.retired:
 			continue
 		var d: float = o.race_dist - race_dist
 		if d > 3.0 and d < TOW_RANGE and absf(o.lateral - lateral) < 2.2:

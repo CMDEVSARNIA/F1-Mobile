@@ -22,6 +22,9 @@ const LowpolyCar = preload("res://scripts/lowpoly_car.gd")
 const WHEEL_NAME := "^(wheel|tyre|tire)[_.\\-]?\\d*$"
 ## Node that opens for DRS (rear-wing top element).
 const FLAP_NAMES := ["drs", "flap", "spoiler_002"]
+## Wing parts, baked separately so damage can bend or knock them off.
+const FRONT_WING_NAMES := ["front_wing", "frontwing", "front_spoiler"]
+const REAR_WING_NAMES := ["rear_wing", "rearwing", "spoiler"]
 ## Texture-atlas models (one shared material) are recoloured by this shader:
 ## near-white paint becomes the team colour, the red stripes the accent.
 const LIVERY_SHADER := """
@@ -63,9 +66,16 @@ var _steer_vis := 0.0
 var _drs_amt := 0.0
 var _drs_open := false
 var _wheel_radius := 0.36
+var _parts := {}  # "front_wing"/"rear_wing" -> {node, base, pivot}
+var _susp := {"susp_l": 0.0, "susp_r": 0.0}
+var _twist := 0.0
+var _smoke: CPUParticles3D
+static var _bits_mesh: Mesh
+static var _bits_mat: Material
 
 
 func _ready() -> void:
+	_twist = randf_range(-1.0, 1.0)
 	for path: String in CUSTOM_MODELS:
 		if ResourceLoader.exists(path):
 			_load_custom(path)
@@ -113,6 +123,15 @@ func _load_custom(path: String) -> void:
 		mi.transform = bake.flap.base
 		add_child(mi)
 		_flap = {"node": mi, "base": bake.flap.base, "pivot": bake.flap.pivot}
+	for part: String in ["front_wing", "rear_wing"]:
+		var g: Dictionary = bake[part]
+		if g.is_empty():
+			continue
+		var wmi := MeshInstance3D.new()
+		wmi.mesh = g.mesh
+		wmi.material_override = mat
+		add_child(wmi)
+		_parts[part] = {"node": wmi, "base": Transform3D.IDENTITY, "pivot": g.pivot}
 	top_height = bake.top
 	_wheel_radius = bake.radius
 
@@ -131,6 +150,8 @@ static func _bake(path: String) -> Dictionary:
 	var parts: Array[MeshInstance3D] = []
 	var wheel_parts: Array[MeshInstance3D] = []
 	var flap_part: MeshInstance3D = null
+	var front_parts: Array[MeshInstance3D] = []
+	var rear_parts: Array[MeshInstance3D] = []
 	for mi: MeshInstance3D in inst.find_children("*", "MeshInstance3D", true, false):
 		if mi.mesh == null:
 			continue
@@ -139,6 +160,10 @@ static func _bake(path: String) -> Dictionary:
 			wheel_parts.append(mi)
 		elif flap_part == null and FLAP_NAMES.any(func(h: String) -> bool: return h in nm):
 			flap_part = mi
+		elif FRONT_WING_NAMES.any(func(h: String) -> bool: return h in nm):
+			front_parts.append(mi)
+		elif REAR_WING_NAMES.any(func(h: String) -> bool: return h in nm):
+			rear_parts.append(mi)
 		else:
 			parts.append(mi)
 	if wheel_parts.size() < 4:
@@ -152,7 +177,7 @@ static func _bake(path: String) -> Dictionary:
 			t = (cur as Node3D).transform * t
 			cur = cur.get_parent()
 		return t
-	var all: Array[MeshInstance3D] = parts + wheel_parts
+	var all: Array[MeshInstance3D] = parts + wheel_parts + front_parts + rear_parts
 	if flap_part:
 		all.append(flap_part)
 	var box := AABB()
@@ -180,6 +205,8 @@ static func _bake(path: String) -> Dictionary:
 			if atlas == null and m is BaseMaterial3D and (m as BaseMaterial3D).albedo_texture:
 				atlas = (m as BaseMaterial3D).albedo_texture
 	var out := {"body": st.commit(), "atlas": atlas, "mat0": mat0, "wheels": [], "flap": {},
+			"front_wing": _bake_group(front_parts, fit, rel, true),
+			"rear_wing": _bake_group(rear_parts, fit, rel, false),
 			"top": box.size.y * s}
 	var zs: Array[float] = []
 	for mi in wheel_parts:
@@ -204,6 +231,25 @@ static func _bake(path: String) -> Dictionary:
 				"pivot": Vector3(fb.get_center().x, fb.get_center().y, fb.position.z)}
 	root.free()
 	return out
+
+
+## One mesh for a wing assembly plus the point it hinges on when bent
+## (where it meets the nose, or the bottom of the rear wing).
+static func _bake_group(group: Array[MeshInstance3D], fit: Transform3D, rel: Callable, front: bool) -> Dictionary:
+	if group.is_empty():
+		return {}
+	var st := SurfaceTool.new()
+	var box := AABB()
+	for k in group.size():
+		var mi := group[k]
+		var t: Transform3D = fit * rel.call(mi)
+		for i in mi.mesh.get_surface_count():
+			st.append_from(mi.mesh, i, t)
+		var b := t * mi.get_aabb()
+		box = b if k == 0 else box.merge(b)
+	var c := box.get_center()
+	var pivot := Vector3(c.x, c.y, box.end.z) if front else Vector3(c.x, box.position.y, c.z)
+	return {"mesh": st.commit(), "pivot": pivot}
 
 
 ## Fallback for models without separate wheels: auto-fit and paint by name.
@@ -281,8 +327,12 @@ func update_visual(steer: float, speed: float, dt: float) -> void:
 		var r := Basis(Vector3.RIGHT, _spin)
 		if w.front:
 			r = Basis(Vector3.UP, -_steer_vis) * r
+		# Bent suspension: the wheel leans over.
+		var bent: float = _susp.susp_r if ctr.x > 0.0 else _susp.susp_l
+		if bent > 0.0:
+			r = Basis(Vector3.BACK, signf(ctr.x) * bent * 0.3) * r
 		w.node.transform = Transform3D(r, ctr - r * ctr) * w.base
-	if not _flap.is_empty():
+	if not _flap.is_empty() and _flap.node.visible:
 		_drs_amt = move_toward(_drs_amt, 1.0 if _drs_open else 0.0, dt * 5.0)
 		var pv: Vector3 = _flap.pivot
 		var fr := Basis(Vector3.RIGHT, -0.45 * _drs_amt)
@@ -307,3 +357,118 @@ func _build_procedural() -> void:
 	_lowpoly.accent_color = accent_color
 	add_child(_lowpoly)
 	top_height = 1.08
+	_parts["front_wing"] = {"node": _lowpoly.front_wing, "base": Transform3D.IDENTITY, "pivot": Vector3(0, 0.15, -2.45)}
+	_parts["rear_wing"] = {"node": _lowpoly.rear_wing, "base": Transform3D.IDENTITY, "pivot": Vector3(0, 0.4, 2.3)}
+
+
+# ------------------------------------------------------------ damage
+
+## Bend a part by `amount` (0..1): wings droop and twist, wheels lean.
+func set_part_damage(part: String, amount: float) -> void:
+	if _susp.has(part):
+		_susp[part] = amount
+		return
+	if not _parts.has(part):
+		return
+	var p: Dictionary = _parts[part]
+	var front := part == "front_wing"
+	var r := Basis(Vector3.RIGHT, (-0.3 if front else 0.3) * amount) \
+			* Basis(Vector3.UP, 0.12 * amount * _twist) * Basis(Vector3.BACK, 0.15 * amount * _twist)
+	var pv: Vector3 = p.pivot
+	p.node.transform = Transform3D(r, pv - r * pv) * p.base
+
+
+## Knock a part off: hides it and returns a copy (transform = its world
+## transform) for the caller to send tumbling down the track.
+func detach_part(part: String) -> Node3D:
+	if not _parts.has(part) or not _parts[part].node.visible:
+		return null
+	var node: Node3D = _parts[part].node
+	var copy: Node3D = node.duplicate()
+	copy.transform = node.global_transform
+	node.visible = false
+	if part == "rear_wing" and not _flap.is_empty():
+		_flap.node.visible = false
+	return copy
+
+
+## Fresh part fitted in the pits.
+func repair_part(part: String) -> void:
+	if not _parts.has(part):
+		return
+	var p: Dictionary = _parts[part]
+	p.node.visible = true
+	p.node.transform = p.base
+	if part == "rear_wing" and not _flap.is_empty():
+		_flap.node.visible = true
+
+
+## A spray of carbon bits where the car hit something.
+func debris_burst(at: Vector3, vel: Vector3) -> void:
+	if _bits_mesh == null:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.09, 0.02, 0.06)
+		_bits_mesh = bm
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.08, 0.08, 0.09)
+		m.roughness = 0.4
+		_bits_mat = m
+	var p := CPUParticles3D.new()
+	p.mesh = _bits_mesh
+	p.material_override = _bits_mat
+	p.amount = 16
+	p.lifetime = 1.3
+	p.one_shot = true
+	p.explosiveness = 0.9
+	p.direction = (vel.normalized() + Vector3.UP).normalized() if vel.length() > 0.1 else Vector3.UP
+	p.spread = 70.0
+	p.initial_velocity_min = 3.0
+	p.initial_velocity_max = 8.0
+	p.angular_velocity_min = -720.0
+	p.angular_velocity_max = 720.0
+	p.particle_flag_rotate_y = true
+	p.scale_amount_min = 0.6
+	p.scale_amount_max = 1.4
+	var scene := get_tree().current_scene
+	scene.add_child(p)
+	p.global_position = at
+	p.emitting = true
+	get_tree().create_timer(2.0).timeout.connect(p.queue_free)
+
+
+## Grey smoke from the back of a broken car.
+func smoke(on: bool) -> void:
+	if on and _smoke == null:
+		_smoke = CPUParticles3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(1.0, 1.0)
+		_smoke.mesh = q
+		var m := StandardMaterial3D.new()
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.vertex_color_use_as_albedo = true
+		_smoke.material_override = m
+		_smoke.amount = 28
+		_smoke.lifetime = 2.6
+		_smoke.position = Vector3(0, 0.7, 2.0)
+		_smoke.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		_smoke.emission_sphere_radius = 0.3
+		_smoke.direction = Vector3.UP
+		_smoke.spread = 25.0
+		_smoke.gravity = Vector3(0, 0.8, 0)
+		_smoke.initial_velocity_min = 1.0
+		_smoke.initial_velocity_max = 2.5
+		_smoke.scale_amount_min = 1.2
+		_smoke.scale_amount_max = 2.6
+		var grow := Curve.new()
+		grow.add_point(Vector2(0, 0.4))
+		grow.add_point(Vector2(1, 1.6))
+		_smoke.scale_amount_curve = grow
+		var fade := Gradient.new()
+		fade.set_color(0, Color(0.35, 0.35, 0.36, 0.7))
+		fade.set_color(1, Color(0.55, 0.55, 0.56, 0.0))
+		_smoke.color_ramp = fade
+		add_child(_smoke)
+	if _smoke:
+		_smoke.emitting = on

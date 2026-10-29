@@ -196,6 +196,8 @@ func _spawn_cars(opponents: int) -> void:
 		car.is_player = is_player
 		car.lap_completed.connect(_on_lap_completed)
 		car.crossed_finish.connect(_on_crossed_finish)
+		car.damaged.connect(_on_damaged)
+		car.damage_mode = GameState.settings.damage
 		car.team = idx
 		car.race_laps = laps
 		car.tyre_wear_enabled = laps >= 2
@@ -253,6 +255,10 @@ func _apply_controls() -> void:
 	player.realistic = s.handling == 1
 	player.traction_control = s.traction_control
 	player.abs_enabled = s.abs
+	# Time trial keeps damage cosmetic: a crash shouldn't end the session.
+	var dm: int = mini(s.damage, 1) if time_trial else s.damage
+	for c in cars:
+		c.damage_mode = dm
 	var t := hud.touch
 	t.steer_mode = s.steering
 	t.auto_throttle = s.auto_throttle
@@ -333,9 +339,13 @@ func _to_menu() -> void:
 func _standings() -> Array:
 	var order := _finish_order.duplicate()
 	order.sort_custom(func(a, b): return a.finish_time + a.penalty < b.finish_time + b.penalty)
-	var running := cars.filter(func(c): return not c.finished)
+	var running := cars.filter(func(c): return not c.finished and not c.retired)
 	running.sort_custom(func(a, b): return a.race_dist > b.race_dist)
 	order.append_array(running)
+	# Retirements are classified last, furthest-run first.
+	var out := cars.filter(func(c): return c.retired and not c.finished)
+	out.sort_custom(func(a, b): return a.race_dist > b.race_dist)
+	order.append_array(out)
 	return order
 
 
@@ -366,6 +376,34 @@ func _play_cue(stream: AudioStream, force := false) -> void:
 	_cue.stream = stream
 	_cue.play()
 	_cue_cooldown = 2.5
+
+
+func _on_damaged(car: Car, what: String) -> void:
+	if what == "retired" and car != player and car.is_inside_tree():
+		if not time_trial and state == State.RACING:
+			hud.show_message("%s IS OUT OF THE RACE" % car.driver_name, 2.0)
+		return
+	if car != player:
+		return
+	var realistic := car.damage_mode == 2
+	match what:
+		"front_wing":
+			hud.show_message("FRONT WING DAMAGE" + ("  -  BOX FOR A NEW NOSE" if realistic else ""), 2.5)
+		"front_wing_lost":
+			hud.show_message("FRONT WING GONE" + ("!  BOX, BOX!" if realistic else ""), 2.5)
+		"rear_wing":
+			hud.show_message("REAR WING DAMAGE", 2.0)
+		"rear_wing_lost":
+			hud.show_message("REAR WING GONE", 2.5)
+		"susp_l", "susp_r":
+			hud.show_message("SUSPENSION DAMAGE" + ("  -  IT WILL PULL" if realistic else ""), 2.5)
+		"puncture":
+			hud.show_message("PUNCTURE!  BOX, BOX!", 3.0)
+		"retired":
+			if state == State.RACING:
+				state = State.FINISHED
+				hud.show_message("RETIRED  -  THE CAR IS TOO DAMAGED", 4.0)
+				_results_timer = 4.0
 
 
 func _on_pit_event(car: Car, what: String) -> void:
@@ -430,7 +468,12 @@ func _show_results() -> void:
 	for i in order.size():
 		var c: Car = order[i]
 		var t := ""
-		if i == 0:
+		if c.retired and not c.finished:
+			t = "DNF"
+		elif not leader.finished:
+			# We retired before the flag: show where everyone is instead.
+			t = "LAP %d/%d" % [clampi(c.lap, 1, laps), laps]
+		elif i == 0:
 			t = GameState.format_time(leader_time - _race_start)
 		elif c.finished:
 			t = "+%.3f" % (c.finish_time + c.penalty - leader_time)
@@ -447,7 +490,8 @@ func _show_results() -> void:
 		rows.append({"pos": i + 1, "name": c.driver_name, "time": t, "stops": c.pit_stops,
 				"best": GameState.format_time(c.best_lap), "is_player": c == player})
 	if mode == "season" and _awarded.is_empty():
-		var gained := GameState.season_award(order.map(func(c): return c.driver_name))
+		var dnf := order.filter(func(c): return c.retired and not c.finished).map(func(c): return c.driver_name)
+		var gained := GameState.season_award(order.map(func(c): return c.driver_name), dnf)
 		_awarded = gained
 		for r in rows:
 			r["pts"] = gained.get(r.name, 0)

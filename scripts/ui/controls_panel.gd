@@ -28,11 +28,12 @@ const TABS := {
 		["braking_assist", "Braking assist", [0, 1, 2], ["Off", "Low", "High"]],
 		["steer_assist", "Steering assist", [0, 1, 2], ["Off", "Low", "High"]],
 		["auto_drs", "DRS", [false, true], ["Tap to open", "Automatic"]],
+		["damage", "Damage", [2, 1, 0], ["Realistic", "Visual only", "Off"]],
 	],
 }
 const HINTS := {
 	"CONTROLS": "Tilt straightens itself at lights out: hold the phone how you'll race.",
-	"DRIVING": "Realistic: the tyres can slide, lock and spin. Traction control and ABS catch it; turn them off for full control.",
+	"DRIVING": "Realistic handling: the tyres can slide, lock and spin. Realistic damage: broken wings cost grip, punctures and bent suspension pull, a big crash ends your race.",
 }
 
 var in_race := false

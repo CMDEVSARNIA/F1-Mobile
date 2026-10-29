@@ -21,6 +21,9 @@ var _stripe: StandardMaterial3D
 var _drs_flap: Node3D
 var _drs_target := 0.0
 var _front_pivots: Array[Node3D] = []
+## Wing assemblies, kept as their own nodes so damage can bend or remove them.
+var front_wing: Node3D
+var rear_wing: Node3D
 var _spinners: Array[Node3D] = []
 var _spin := 0.0
 
@@ -131,6 +134,8 @@ func _build_floor() -> void:
 
 
 func _build_front_wing() -> void:
+	front_wing = Node3D.new()
+	add_child(front_wing)
 	# Three elements, rising and steepening toward the back.
 	var elems := [
 		[-2.92, 0.085, 0.36, -4.0, 1.96, _carbon],
@@ -138,22 +143,24 @@ func _build_front_wing() -> void:
 		[-2.53, 0.215, 0.15, -34.0, 1.70, _paint],
 	]
 	for e in elems:
-		_add(_wing(Vector3(0, e[1], e[0]), e[2], e[3], e[4]), e[5])
+		_add(_wing(Vector3(0, e[1], e[0]), e[2], e[3], e[4]), e[5], front_wing)
 	for sx: float in [-1.0, 1.0]:
 		var ep := [Vector3(0.98 * sx, 0.04, -3.12), Vector3(0.98 * sx, 0.04, -2.42),
 				Vector3(0.98 * sx, 0.3, -2.42), Vector3(0.98 * sx, 0.26, -2.9)]
-		_add(_slab(ep, 0.02), _paint)
+		_add(_slab(ep, 0.02), _paint, front_wing)
 		# Nose pylons
-		_add(_tube([Vector3(0.09 * sx, 0.2, -2.45), Vector3(0.2 * sx, 0.1, -2.8)], 0.018, 4), _carbon)
+		_add(_tube([Vector3(0.09 * sx, 0.2, -2.45), Vector3(0.2 * sx, 0.1, -2.8)], 0.018, 4), _carbon, front_wing)
 
 
 func _build_rear_wing() -> void:
+	rear_wing = Node3D.new()
+	add_child(rear_wing)
 	# Main plane
-	_add(_wing(Vector3(0, 0.88, 2.34), 0.34, -10.0, 1.0), _carbon)
+	_add(_wing(Vector3(0, 0.88, 2.34), 0.34, -10.0, 1.0), _carbon, rear_wing)
 	# DRS flap, pivoting about its leading edge
 	_drs_flap = Node3D.new()
 	_drs_flap.position = Vector3(0, 0.95, 2.18)
-	add_child(_drs_flap)
+	rear_wing.add_child(_drs_flap)
 	var flap := MeshInstance3D.new()
 	flap.mesh = _wing(Vector3(0, 0.03, 0.12), 0.24, -32.0, 0.98)
 	flap.material_override = _accent
@@ -163,9 +170,9 @@ func _build_rear_wing() -> void:
 	for sx: float in [-1.0, 1.0]:
 		var ep := [Vector3(0.51 * sx, 0.38, 2.0), Vector3(0.51 * sx, 0.38, 2.62),
 				Vector3(0.51 * sx, 1.08, 2.62), Vector3(0.51 * sx, 1.08, 2.08)]
-		_add(_slab(ep, 0.025), _paint)
+		_add(_slab(ep, 0.025), _paint, rear_wing)
 	# Swan-neck pylon
-	_add(_tube([Vector3(0, 0.38, 2.2), Vector3(0, 0.7, 2.3), Vector3(0, 0.86, 2.28)], 0.03, 4), _carbon)
+	_add(_tube([Vector3(0, 0.38, 2.2), Vector3(0, 0.7, 2.3), Vector3(0, 0.86, 2.28)], 0.03, 4), _carbon, rear_wing)
 
 
 func _build_cockpit() -> void:
@@ -245,11 +252,11 @@ func _mat(c: Color, metallic := 0.0, rough := 0.5, emission := 0.0) -> StandardM
 	return m
 
 
-func _add(mesh: Mesh, mat: Material) -> MeshInstance3D:
+func _add(mesh: Mesh, mat: Material, parent: Node3D = null) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = mat
-	add_child(mi)
+	(parent if parent else self).add_child(mi)
 	return mi
 
 

@@ -65,6 +65,7 @@ var settings := {
 	"handling": 1,  # 1 realistic, 0 arcade
 	"traction_control": 2,  # 0 off, 1 low, 2 high
 	"abs": true,
+	"damage": 2,  # 0 off, 1 visual only, 2 realistic
 	"camera": 0,
 }
 
@@ -159,10 +160,11 @@ func season_start(length: String) -> void:
 
 
 ## `order` is driver names in finishing order. Returns points scored by each.
-func season_award(order: Array) -> Dictionary:
+## Points by finishing position; retirements (`dnf`) score nothing.
+func season_award(order: Array, dnf: Array = []) -> Dictionary:
 	var gained := {}
 	for i in order.size():
-		var p: int = POINTS[i] if i < POINTS.size() else 0
+		var p: int = POINTS[i] if i < POINTS.size() and not order[i] in dnf else 0
 		season.points[order[i]] = season.points.get(order[i], 0) + p
 		gained[order[i]] = p
 	season.winners.append(order[0])

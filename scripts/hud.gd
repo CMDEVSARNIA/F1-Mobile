@@ -7,6 +7,7 @@ const TouchControls = preload("res://scripts/touch_controls.gd")
 const Dashboard = preload("res://scripts/ui/dashboard.gd")
 const IconButton = preload("res://scripts/ui/icon_button.gd")
 const TyreGauge = preload("res://scripts/ui/tyre_gauge.gd")
+const DamageGauge = preload("res://scripts/ui/damage_gauge.gd")
 const COMPOUND_NAMES := ["SOFT", "MEDIUM", "HARD"]
 const COMPOUND_COLORS := [Color(0.95, 0.12, 0.1), Color(1.0, 0.82, 0.1), Color(0.95, 0.95, 0.95)]
 
@@ -27,6 +28,7 @@ var last_label: Label
 var best_label: Label
 var dashboard: Control
 var tyre_gauge: Control
+var damage_gauge: Control
 var box_button: Button
 var box_picker: HBoxContainer
 var pits_enabled := true
@@ -140,6 +142,10 @@ func _ready() -> void:
 	tyre_gauge = TyreGauge.new()
 	root.add_child(tyre_gauge)
 	_place(tyre_gauge, Control.PRESET_CENTER_BOTTOM, -215, -100, -133, -18)
+	# Damage: car diagram on the other side of the display
+	damage_gauge = DamageGauge.new()
+	root.add_child(damage_gauge)
+	_place(damage_gauge, Control.PRESET_CENTER_BOTTOM, 133, -100, 215, -18)
 
 	# Pit call: BOX button under the map, compound picker under that
 	box_button = Button.new()
@@ -220,6 +226,13 @@ func update_telemetry(car, position: int, total: int, laps: int, now: float, rac
 	tyre_gauge.compound_color = comp.color
 	tyre_gauge.life = 1.0 - car.wear
 	tyre_gauge.enabled = car.tyre_wear_enabled
+	damage_gauge.visible = car.damage_mode > 0
+	damage_gauge.front_wing = car.dmg.front_wing
+	damage_gauge.rear_wing = car.dmg.rear_wing
+	damage_gauge.susp_l = car.dmg.susp_l
+	damage_gauge.susp_r = car.dmg.susp_r
+	damage_gauge.puncture = car.puncture
+	damage_gauge.puncture_front = car.puncture_front
 	box_button.visible = pits_enabled and racing and not car.finished and session_mode != "time_trial"
 	_box_requested = car.pit_requested
 	box_button.disabled = car.in_pit
